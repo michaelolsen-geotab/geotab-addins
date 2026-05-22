@@ -154,8 +154,10 @@
 
 <script>
 // ─── Add-In entry point ──────────────────────────────────────────────────────
+let _api = null;
+
 geotab.addin.holtDailyReport = function (api, state) {
-  let _api = api;
+  _api = api;
 
   return {
     initialize(freshApi, freshState, callback) {
@@ -398,12 +400,7 @@ function exportCsv() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function callApi(method, params) {
   return new Promise((resolve, reject) => {
-    // Support both promise and callback styles
-    const result = (typeof api !== "undefined" ? api : window._api || {}).call
-      ? (typeof api !== "undefined" ? api : window._api).call(method, params, resolve, reject)
-      : null;
-    // If the CLI injected a global api object use it, otherwise rely on geotab.addin scope
-    if (result && typeof result.then === "function") result.then(resolve).catch(reject);
+    _api.call(method, params, resolve, reject);
   });
 }
 
@@ -432,14 +429,6 @@ function setError(msg) {
   el.style.display = msg ? "block" : "none";
 }
 
-// ─── Standalone dev mode (open directly in browser without MyGeotab) ─────────
-if (typeof geotab === "undefined") {
-  window.geotab = { addin: {} };
-  document.addEventListener("DOMContentLoaded", () => {
-    setError("Running outside MyGeotab — API calls will fail. Deploy via manifest to test live.");
-    document.getElementById("runBtn").disabled = true;
-  });
-}
 </script>
 </body>
 </html>
