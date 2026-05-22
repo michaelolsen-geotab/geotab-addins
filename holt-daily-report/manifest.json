@@ -1,0 +1,16 @@
+{
+  "name": "Holt Daily Fleet Report",
+  "supportEmail": "michaelolsen@geotab.com",
+  "version": "1.0.0",
+  "items": [
+    {
+      "page": "map",
+      "click": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/index.html",
+      "menuName": {
+        "en": "Daily Fleet Report"
+      },
+      "icon": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/icon.svg"
+    }
+  ],
+  "isSigned": false
+}

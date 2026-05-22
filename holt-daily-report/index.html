@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Fleet Report</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 13px;
+    color: #222;
+    background: #f5f7fa;
+    padding: 16px;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #003087;
+    flex: 1;
+  }
+
+  input[type="date"] {
+    border: 1px solid #ccd;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+
+  button {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  #runBtn  { background: #003087; color: #fff; }
+  #runBtn:hover { background: #004bb5; }
+  #csvBtn  { background: #e8edf5; color: #003087; }
+  #csvBtn:hover { background: #d0daea; }
+  #csvBtn:disabled { opacity: 0.4; cursor: default; }
+
+  #status {
+    font-size: 12px;
+    color: #666;
+    min-width: 120px;
+  }
+
+  .card {
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    overflow: hidden;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  thead th {
+    background: #003087;
+    color: #fff;
+    padding: 9px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  thead th:not(:first-child) { text-align: right; }
+
+  tbody tr:nth-child(even) { background: #f0f4fb; }
+  tbody tr:hover { background: #e3eaf8; }
+
+  tbody td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+    white-space: nowrap;
+  }
+
+  tbody td:not(:first-child) { text-align: right; }
+
+  tfoot td {
+    padding: 9px 12px;
+    font-weight: 600;
+    border-top: 2px solid #003087;
+    background: #eef2fb;
+    white-space: nowrap;
+  }
+
+  tfoot td:not(:first-child) { text-align: right; }
+
+  .na { color: #aaa; font-style: italic; }
+
+  #empty {
+    padding: 40px;
+    text-align: center;
+    color: #888;
+  }
+
+  #error {
+    color: #c0392b;
+    background: #fdf3f3;
+    border: 1px solid #f5c6c6;
+    border-radius: 4px;
+    padding: 10px 14px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h2>Holt Logistics — Daily Fleet Report</h2>
+  <label for="reportDate" style="color:#555;font-size:12px">Date:</label>
+  <input type="date" id="reportDate">
+  <button id="runBtn">Run Report</button>
+  <button id="csvBtn" disabled>Export CSV</button>
+  <span id="status"></span>
+</div>
+
+<div id="error"></div>
+
+<div class="card">
+  <div id="empty">Select a date and click Run Report.</div>
+  <table id="reportTable" style="display:none">
+    <thead>
+      <tr>
+        <th>Asset Name</th>
+        <th>Usage Hours</th>
+        <th>Miles Traveled</th>
+        <th>Fuel Used (gal)</th>
+        <th>EV Energy (kWh)</th>
+        <th>Fuel+EV / Hour</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+    <tfoot id="tfoot"></tfoot>
+  </table>
+</div>
+
+<script>
+// ─── Add-In entry point ──────────────────────────────────────────────────────
+geotab.addin.holtDailyReport = function (api, state) {
+  let _api = api;
+
+  return {
+    initialize(freshApi, freshState, callback) {
+      _api = freshApi;
+      // Default to yesterday
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      document.getElementById("reportDate").valueAsDate = d;
+      document.getElementById("runBtn").addEventListener("click", runReport);
+      document.getElementById("csvBtn").addEventListener("click", exportCsv);
+      callback();
+    },
+    focus(freshApi, freshState) {
+      _api = freshApi;
+    },
+    blur() {}
+  };
+};
+
+// ─── Diagnostic IDs ──────────────────────────────────────────────────────────
+const DIAG_FUEL_TOTAL    = "DiagnosticTotalTripFuelUsedId";
+const DIAG_EV_ENERGY     = "DiagnosticTotalEVEnergyId";       // kWh cumulative
+const DIAG_ENG_HOURS_J1708 = "DiagnosticJ1708EngineHoursId"; // seconds cumulative
+
+// km → miles
+const KM_TO_MI = 0.621371;
+// litres → US gallons
+const L_TO_GAL = 0.264172;
+
+let _tableData = [];
+
+// ─── Main ────────────────────────────────────────────────────────────────────
+async function runReport() {
+  const dateStr = document.getElementById("reportDate").value;
+  if (!dateStr) return;
+
+  setStatus("Loading…");
+  setError("");
+  showTable(false);
+  document.getElementById("csvBtn").disabled = true;
+  _tableData = [];
+
+  try {
+    const from = new Date(dateStr + "T00:00:00");
+    const to   = new Date(dateStr + "T23:59:59.999");
+
+    setStatus("Fetching trips…");
+    const trips = await callApi("Get", {
+      typeName: "Trip",
+      search: { fromDate: from.toISOString(), toDate: to.toISOString() },
+      resultsLimit: 10000
+    });
+
+    if (!trips.length) {
+      setStatus("No trips found for this date.");
+      return;
+    }
+
+    // Group trips by device
+    const byDevice = {};
+    trips.forEach(t => {
+      const id = t.device.id;
+      if (!byDevice[id]) byDevice[id] = [];
+      byDevice[id].push(t);
+    });
+
+    const deviceIds = Object.keys(byDevice);
+
+    setStatus("Fetching fuel & energy data…");
+
+    // Parallel: fuel StatusData + EV energy StatusData
+    const [fuelData, evData] = await Promise.all([
+      getStatusDataDelta(DIAG_FUEL_TOTAL, from, to),
+      getStatusDataDelta(DIAG_EV_ENERGY, from, to)
+    ]);
+
+    setStatus("Calculating…");
+
+    // Build rows
+    const rows = deviceIds.map(id => {
+      const devTrips = byDevice[id].sort((a, b) => new Date(a.start) - new Date(b.start));
+      const first = devTrips[0];
+      const last  = devTrips[devTrips.length - 1];
+
+      // Usage hours: engine hours delta (seconds → hours); fallback to driving+idling sum
+      let usageHours;
+      const ehDelta = (last.engineHours - first.engineHours) / 3600;
+      if (ehDelta > 0 && ehDelta < 24) {
+        usageHours = ehDelta;
+      } else {
+        // Fallback: sum driving + idling durations across trips
+        usageHours = devTrips.reduce((s, t) => {
+          return s + durationToHours(t.drivingDuration) + durationToHours(t.idlingDuration);
+        }, 0);
+      }
+
+      // Miles: sum all trip distances (value is in km from API)
+      const miles = devTrips.reduce((s, t) => s + (t.distance || 0), 0) * KM_TO_MI;
+
+      // Fuel (L → gal)
+      const fuelGal = fuelData[id] != null ? fuelData[id] * L_TO_GAL : null;
+
+      // EV energy (kWh, already in kWh from API)
+      const kWh = evData[id] != null ? evData[id] : null;
+
+      // Fuel+EV per hour
+      let perHour = null;
+      if (usageHours > 0) {
+        const totalFuelEq = (fuelGal || 0) + (kWh != null ? kWh * 0.033695 : 0); // kWh → gal-eq
+        if (fuelGal != null || kWh != null) perHour = totalFuelEq / usageHours;
+      }
+
+      return {
+        name: first.device.name || id,
+        usageHours,
+        miles,
+        fuelGal,
+        kWh,
+        perHour
+      };
+    });
+
+    // Sort by name
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+    _tableData = rows;
+
+    renderTable(rows);
+    setStatus(`${rows.length} asset${rows.length !== 1 ? "s" : ""} — ${dateStr}`);
+    document.getElementById("csvBtn").disabled = false;
+
+  } catch (err) {
+    setError(err.message || String(err));
+    setStatus("Error.");
+  }
+}
+
+// ─── Fetch cumulative StatusData delta per device ────────────────────────────
+async function getStatusDataDelta(diagnosticId, from, to) {
+  let data;
+  try {
+    data = await callApi("Get", {
+      typeName: "StatusData",
+      search: {
+        fromDate: from.toISOString(),
+        toDate: to.toISOString(),
+        diagnosticSearch: { id: diagnosticId }
+      },
+      resultsLimit: 50000
+    });
+  } catch (_) {
+    return {}; // diagnostic not present in this database
+  }
+
+  // Group by device, calc (max - min) for cumulative odometer-style counters
+  const byDevice = {};
+  data.forEach(sd => {
+    const id = sd.device.id;
+    if (!byDevice[id]) byDevice[id] = [];
+    byDevice[id].push(sd.data);
+  });
+
+  const result = {};
+  Object.entries(byDevice).forEach(([id, vals]) => {
+    const delta = Math.max(...vals) - Math.min(...vals);
+    if (delta >= 0) result[id] = delta;
+  });
+  return result;
+}
+
+// ─── Render ──────────────────────────────────────────────────────────────────
+function renderTable(rows) {
+  const tbody = document.getElementById("tbody");
+  const tfoot = document.getElementById("tfoot");
+  tbody.innerHTML = "";
+
+  let totHours = 0, totMiles = 0, totFuel = 0, totKwh = 0;
+  let hasFuel = false, hasKwh = false;
+
+  rows.forEach(r => {
+    totHours += r.usageHours || 0;
+    totMiles += r.miles || 0;
+    if (r.fuelGal != null) { totFuel += r.fuelGal; hasFuel = true; }
+    if (r.kWh     != null) { totKwh  += r.kWh;     hasKwh  = true; }
+
+    const perHourStr = r.perHour != null
+      ? fmt(r.perHour, 3) + " gal-eq/hr"
+      : '<span class="na">—</span>';
+
+    tbody.insertAdjacentHTML("beforeend", `<tr>
+      <td>${escHtml(r.name)}</td>
+      <td>${fmt(r.usageHours, 2)}</td>
+      <td>${fmt(r.miles, 1)}</td>
+      <td>${r.fuelGal != null ? fmt(r.fuelGal, 2) : '<span class="na">—</span>'}</td>
+      <td>${r.kWh     != null ? fmt(r.kWh, 2)     : '<span class="na">—</span>'}</td>
+      <td>${perHourStr}</td>
+    </tr>`);
+  });
+
+  // Totals
+  const totPerHour = totHours > 0 && (hasFuel || hasKwh)
+    ? fmt((totFuel + totKwh * 0.033695) / totHours, 3) + " gal-eq/hr"
+    : '<span class="na">—</span>';
+
+  tfoot.innerHTML = `<tr>
+    <td>TOTAL (${rows.length} assets)</td>
+    <td>${fmt(totHours, 2)}</td>
+    <td>${fmt(totMiles, 1)}</td>
+    <td>${hasFuel ? fmt(totFuel, 2) : '<span class="na">—</span>'}</td>
+    <td>${hasKwh  ? fmt(totKwh,  2) : '<span class="na">—</span>'}</td>
+    <td>${totPerHour}</td>
+  </tr>`;
+
+  showTable(true);
+}
+
+// ─── CSV export ──────────────────────────────────────────────────────────────
+function exportCsv() {
+  const dateStr = document.getElementById("reportDate").value;
+  const header = ["Asset Name", "Usage Hours", "Miles Traveled", "Fuel Used (gal)", "EV Energy (kWh)", "Fuel+EV per Hour (gal-eq)"];
+  const lines = [header.join(",")];
+
+  _tableData.forEach(r => {
+    lines.push([
+      `"${r.name.replace(/"/g,'""')}"`,
+      fmtCsv(r.usageHours, 2),
+      fmtCsv(r.miles, 1),
+      r.fuelGal != null ? fmtCsv(r.fuelGal, 2) : "",
+      r.kWh     != null ? fmtCsv(r.kWh, 2)     : "",
+      r.perHour != null ? fmtCsv(r.perHour, 3)  : ""
+    ].join(","));
+  });
+
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `holt-fleet-report-${dateStr}.csv`;
+  a.click();
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function callApi(method, params) {
+  return new Promise((resolve, reject) => {
+    // Support both promise and callback styles
+    const result = (typeof api !== "undefined" ? api : window._api || {}).call
+      ? (typeof api !== "undefined" ? api : window._api).call(method, params, resolve, reject)
+      : null;
+    // If the CLI injected a global api object use it, otherwise rely on geotab.addin scope
+    if (result && typeof result.then === "function") result.then(resolve).catch(reject);
+  });
+}
+
+// "HH:MM:SS" or decimal days string → hours
+function durationToHours(d) {
+  if (!d) return 0;
+  if (typeof d === "number") return d * 24; // Excel day fraction
+  const parts = String(d).split(":");
+  if (parts.length === 3) {
+    return parseInt(parts[0]) + parseInt(parts[1]) / 60 + parseFloat(parts[2]) / 3600;
+  }
+  return 0;
+}
+
+function fmt(n, dp) { return (n || 0).toFixed(dp); }
+function fmtCsv(n, dp) { return fmt(n, dp); }
+function escHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function showTable(v) {
+  document.getElementById("reportTable").style.display = v ? "" : "none";
+  document.getElementById("empty").style.display      = v ? "none" : "";
+}
+function setStatus(msg) { document.getElementById("status").textContent = msg; }
+function setError(msg) {
+  const el = document.getElementById("error");
+  el.textContent = msg;
+  el.style.display = msg ? "block" : "none";
+}
+
+// ─── Standalone dev mode (open directly in browser without MyGeotab) ─────────
+if (typeof geotab === "undefined") {
+  window.geotab = { addin: {} };
+  document.addEventListener("DOMContentLoaded", () => {
+    setError("Running outside MyGeotab — API calls will fail. Deploy via manifest to test live.");
+    document.getElementById("runBtn").disabled = true;
+  });
+}
+</script>
+</body>
+</html>
