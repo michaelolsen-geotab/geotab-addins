@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "items": [
     {
-      "page": "map",
-      "click": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/index.html",
+      "path": "ActivityId/",
+      "url": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/index.html",
+      "svgIcon": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/icon.svg",
       "menuName": {
         "en": "Daily Fleet Report"
-      },
-      "icon": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/icon.svg"
+      }
     }
   ],
   "isSigned": false
