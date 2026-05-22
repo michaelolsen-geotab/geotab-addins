@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "items": [
     {
-      "path": "ActivityId/",
+      "path": "ActivityLink",
       "url": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/index.html",
-      "svgIcon": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/icon.svg",
+      "icon": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/icon.svg",
       "menuName": {
         "en": "Daily Fleet Report"
       }
