@@ -243,10 +243,6 @@ geotab.addin.holtDailyReport = function (api, state) {
   };
 };
 
-// ─── Diagnostic IDs ──────────────────────────────────────────────────────────
-const DIAG_FUEL_TOTAL = "DiagnosticTotalTripFuelUsedId";
-const DIAG_EV_ENERGY  = "DiagnosticTotalEVEnergyId";
-
 const KM_TO_MI = 0.621371;
 const L_TO_GAL = 0.264172;
 
@@ -267,8 +263,8 @@ async function runReport() {
     const from = new Date(dateStr + "T00:00:00");
     const to   = new Date(dateStr + "T23:59:59.999");
 
-    setStatus("Fetching trips…");
-    const [trips, devices] = await Promise.all([
+    setStatus("Fetching data…");
+    const [trips, devices, fuelEvents] = await Promise.all([
       callApi("Get", {
         typeName: "Trip",
         search: { fromDate: from.toISOString(), toDate: to.toISOString() },
@@ -278,6 +274,11 @@ async function runReport() {
         typeName: "Device",
         search: {},
         resultsLimit: 10000
+      }),
+      callApi("Get", {
+        typeName: "FuelAndEnergyUsed",
+        search: { fromDate: from.toISOString(), toDate: to.toISOString() },
+        resultsLimit: 50000
       })
     ]);
 
@@ -289,19 +290,20 @@ async function runReport() {
     const deviceNames = {};
     devices.forEach(d => { deviceNames[d.id] = d.name; });
 
+    // Sum FuelAndEnergyUsed per device
+    const fuelByDevice = {}, evByDevice = {};
+    fuelEvents.forEach(e => {
+      const id = e.device.id;
+      if (e.totalFuelUsed  != null) fuelByDevice[id] = (fuelByDevice[id] || 0) + e.totalFuelUsed;
+      if (e.totalEnergyUsedKwh != null) evByDevice[id] = (evByDevice[id] || 0) + e.totalEnergyUsedKwh;
+    });
+
     const byDevice = {};
     trips.forEach(t => {
       const id = t.device.id;
       if (!byDevice[id]) byDevice[id] = [];
       byDevice[id].push(t);
     });
-
-    setStatus("Fetching fuel & energy data…");
-
-    const [fuelData, evData] = await Promise.all([
-      getStatusDataDelta(DIAG_FUEL_TOTAL, from, to),
-      getStatusDataDelta(DIAG_EV_ENERGY, from, to)
-    ]);
 
     setStatus("Calculating…");
 
@@ -319,9 +321,9 @@ async function runReport() {
           s + durationToHours(t.drivingDuration) + durationToHours(t.idlingDuration), 0);
       }
 
-      const miles  = devTrips.reduce((s, t) => s + (t.distance || 0), 0) * KM_TO_MI;
-      const fuelGal = fuelData[id] != null ? fuelData[id] * L_TO_GAL : null;
-      const kWh     = evData[id]   != null ? evData[id]               : null;
+      const miles   = devTrips.reduce((s, t) => s + (t.distance || 0), 0) * KM_TO_MI;
+      const fuelGal = fuelByDevice[id] != null ? fuelByDevice[id] * L_TO_GAL : null;
+      const kWh     = evByDevice[id]   != null ? evByDevice[id]               : null;
 
       let perHour = null;
       if (usageHours > 0 && (fuelGal != null || kWh != null)) {
@@ -349,38 +351,6 @@ async function runReport() {
     setError(err.message || String(err));
     setStatus("Error.");
   }
-}
-
-// ─── StatusData delta per device ─────────────────────────────────────────────
-async function getStatusDataDelta(diagnosticId, from, to) {
-  let data;
-  try {
-    data = await callApi("Get", {
-      typeName: "StatusData",
-      search: {
-        fromDate: from.toISOString(),
-        toDate: to.toISOString(),
-        diagnosticSearch: { id: diagnosticId }
-      },
-      resultsLimit: 50000
-    });
-  } catch (_) {
-    return {};
-  }
-
-  const byDevice = {};
-  data.forEach(sd => {
-    const id = sd.device.id;
-    if (!byDevice[id]) byDevice[id] = [];
-    byDevice[id].push(sd.data);
-  });
-
-  const result = {};
-  Object.entries(byDevice).forEach(([id, vals]) => {
-    const delta = Math.max(...vals) - Math.min(...vals);
-    if (delta >= 0) result[id] = delta;
-  });
-  return result;
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────
