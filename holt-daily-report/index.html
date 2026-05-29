@@ -6,131 +6,196 @@
 <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="pragma" content="no-cache">
 <title>Daily Fleet Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
+  :root {
+    --text-primary: #1f2833;
+    --text-secondary: #4e677e;
+    --text-placeholder: #8da4b9;
+    --text-disabled: #c0ccd8;
+    --text-reverse: #ffffff;
+    --bg-main: #ffffff;
+    --bg-content-0: #f9fafb;
+    --bg-content-1: #f2f5f7;
+    --bg-content-2: #d9e1e8;
+    --bg-hover: #e6ebef;
+    --bg-brand: #25477b;
+    --action-primary: #0078d3;
+    --action-primary-hover: #005aa8;
+    --border: #c0ccd8;
+    --border-active: #0078d3;
+    --error-text: #c51a11;
+    --error-bg: #fff2f2;
+    --error-border: #f7a1a2;
+    --font: Roboto, "Segoe UI", Helvetica, sans-serif;
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: "Segoe UI", Arial, sans-serif;
-    font-size: 13px;
-    color: #222;
-    background: #f5f7fa;
+    font-family: var(--font);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-content-0);
     padding: 16px;
   }
 
+  /* ── Toolbar ── */
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     margin-bottom: 16px;
     flex-wrap: wrap;
   }
 
-  h2 {
+  .toolbar-title {
     font-size: 16px;
-    font-weight: 600;
-    color: #003087;
+    font-weight: 500;
+    color: var(--text-primary);
     flex: 1;
+    letter-spacing: 0.16px;
+  }
+
+  .toolbar-label {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    letter-spacing: 0.32px;
   }
 
   input[type="date"] {
-    border: 1px solid #ccd;
+    font-family: var(--font);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-main);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 5px 8px;
-    font-size: 13px;
+    padding: 7px 8px;
+    outline: none;
+  }
+  input[type="date"]:focus {
+    border-color: var(--border-active);
   }
 
-  button {
-    padding: 6px 14px;
-    border: none;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
+  /* ── Buttons ── */
+  .btn {
+    font-family: var(--font);
+    font-size: 14px;
     font-weight: 500;
+    padding: 7px 16px;
+    border-radius: 4px;
+    border: 1px solid;
+    cursor: pointer;
+    letter-spacing: 0.16px;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--action-primary);
+    border-color: var(--action-primary);
+    color: var(--text-reverse);
+  }
+  .btn-primary:hover { background: var(--action-primary-hover); border-color: var(--action-primary-hover); }
+
+  .btn-secondary {
+    background: var(--bg-main);
+    border-color: var(--border);
+    color: var(--text-primary);
+  }
+  .btn-secondary:hover { background: var(--bg-hover); }
+  .btn-secondary:disabled {
+    color: var(--text-disabled);
+    border-color: var(--border);
+    background: var(--bg-main);
+    cursor: default;
   }
 
-  #runBtn  { background: #003087; color: #fff; }
-  #runBtn:hover { background: #004bb5; }
-  #csvBtn  { background: #e8edf5; color: #003087; }
-  #csvBtn:hover { background: #d0daea; }
-  #csvBtn:disabled { opacity: 0.4; cursor: default; }
-
+  /* ── Status ── */
   #status {
     font-size: 12px;
-    color: #666;
-    min-width: 120px;
+    color: var(--text-secondary);
+    letter-spacing: 0.32px;
+    min-width: 140px;
   }
 
+  /* ── Error banner ── */
+  #error {
+    display: none;
+    font-size: 14px;
+    color: var(--error-text);
+    background: var(--error-bg);
+    border: 1px solid var(--error-border);
+    border-radius: 4px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+  }
+
+  /* ── Card ── */
   .card {
-    background: #fff;
-    border-radius: 6px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    background: var(--bg-main);
+    border-radius: 8px;
+    border: 1px solid var(--border);
     overflow: hidden;
   }
 
+  #empty {
+    padding: 48px;
+    text-align: center;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  /* ── Table ── */
   table {
     width: 100%;
     border-collapse: collapse;
   }
 
   thead th {
-    background: #003087;
-    color: #fff;
-    padding: 9px 12px;
+    background: var(--bg-brand);
+    color: var(--text-reverse);
+    padding: 10px 12px;
     text-align: left;
-    font-weight: 600;
     font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.32px;
     white-space: nowrap;
   }
-
   thead th:not(:first-child) { text-align: right; }
 
-  tbody tr:nth-child(even) { background: #f0f4fb; }
-  tbody tr:hover { background: #e3eaf8; }
+  tbody tr:nth-child(even) { background: var(--bg-content-0); }
+  tbody tr:hover { background: var(--bg-hover); }
 
   tbody td {
-    padding: 8px 12px;
-    border-bottom: 1px solid #eee;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--bg-content-1);
+    font-size: 14px;
     white-space: nowrap;
   }
-
   tbody td:not(:first-child) { text-align: right; }
 
   tfoot td {
-    padding: 9px 12px;
-    font-weight: 600;
-    border-top: 2px solid #003087;
-    background: #eef2fb;
+    padding: 10px 12px;
+    font-weight: 700;
+    font-size: 14px;
+    border-top: 2px solid var(--bg-brand);
+    background: var(--bg-content-1);
     white-space: nowrap;
   }
-
   tfoot td:not(:first-child) { text-align: right; }
 
-  .na { color: #aaa; font-style: italic; }
-
-  #empty {
-    padding: 40px;
-    text-align: center;
-    color: #888;
-  }
-
-  #error {
-    color: #c0392b;
-    background: #fdf3f3;
-    border: 1px solid #f5c6c6;
-    border-radius: 4px;
-    padding: 10px 14px;
-    display: none;
-  }
+  .na { color: var(--text-placeholder); }
 </style>
 </head>
 <body>
 
 <div class="toolbar">
-  <h2>Holt Logistics — Daily Fleet Report</h2>
-  <label for="reportDate" style="color:#555;font-size:12px">Date:</label>
+  <span class="toolbar-title">Holt Logistics — Daily Fleet Report</span>
+  <span class="toolbar-label">Date:</span>
   <input type="date" id="reportDate">
-  <button id="runBtn">Run Report</button>
-  <button id="csvBtn" disabled>Export CSV</button>
+  <button id="runBtn" class="btn btn-primary">Run Report</button>
+  <button id="csvBtn" class="btn btn-secondary" disabled>Export CSV</button>
   <span id="status"></span>
 </div>
 
@@ -164,7 +229,6 @@ geotab.addin.holtDailyReport = function (api, state) {
   return {
     initialize(freshApi, freshState, callback) {
       _api = freshApi;
-      // Default to yesterday
       const d = new Date();
       d.setDate(d.getDate() - 1);
       document.getElementById("reportDate").valueAsDate = d;
@@ -180,13 +244,10 @@ geotab.addin.holtDailyReport = function (api, state) {
 };
 
 // ─── Diagnostic IDs ──────────────────────────────────────────────────────────
-const DIAG_FUEL_TOTAL    = "DiagnosticTotalTripFuelUsedId";
-const DIAG_EV_ENERGY     = "DiagnosticTotalEVEnergyId";       // kWh cumulative
-const DIAG_ENG_HOURS_J1708 = "DiagnosticJ1708EngineHoursId"; // seconds cumulative
+const DIAG_FUEL_TOTAL = "DiagnosticTotalTripFuelUsedId";
+const DIAG_EV_ENERGY  = "DiagnosticTotalEVEnergyId";
 
-// km → miles
 const KM_TO_MI = 0.621371;
-// litres → US gallons
 const L_TO_GAL = 0.264172;
 
 let _tableData = [];
@@ -207,18 +268,27 @@ async function runReport() {
     const to   = new Date(dateStr + "T23:59:59.999");
 
     setStatus("Fetching trips…");
-    const trips = await callApi("Get", {
-      typeName: "Trip",
-      search: { fromDate: from.toISOString(), toDate: to.toISOString() },
-      resultsLimit: 10000
-    });
+    const [trips, devices] = await Promise.all([
+      callApi("Get", {
+        typeName: "Trip",
+        search: { fromDate: from.toISOString(), toDate: to.toISOString() },
+        resultsLimit: 10000
+      }),
+      callApi("Get", {
+        typeName: "Device",
+        search: {},
+        resultsLimit: 10000
+      })
+    ]);
 
     if (!trips.length) {
       setStatus("No trips found for this date.");
       return;
     }
 
-    // Group trips by device
+    const deviceNames = {};
+    devices.forEach(d => { deviceNames[d.id] = d.name; });
+
     const byDevice = {};
     trips.forEach(t => {
       const id = t.device.id;
@@ -226,11 +296,8 @@ async function runReport() {
       byDevice[id].push(t);
     });
 
-    const deviceIds = Object.keys(byDevice);
-
     setStatus("Fetching fuel & energy data…");
 
-    // Parallel: fuel StatusData + EV energy StatusData
     const [fuelData, evData] = await Promise.all([
       getStatusDataDelta(DIAG_FUEL_TOTAL, from, to),
       getStatusDataDelta(DIAG_EV_ENERGY, from, to)
@@ -238,42 +305,31 @@ async function runReport() {
 
     setStatus("Calculating…");
 
-    // Build rows
-    const rows = deviceIds.map(id => {
+    const rows = Object.keys(byDevice).map(id => {
       const devTrips = byDevice[id].sort((a, b) => new Date(a.start) - new Date(b.start));
       const first = devTrips[0];
       const last  = devTrips[devTrips.length - 1];
 
-      // Usage hours: engine hours delta (seconds → hours); fallback to driving+idling sum
       let usageHours;
       const ehDelta = (last.engineHours - first.engineHours) / 3600;
       if (ehDelta > 0 && ehDelta < 24) {
         usageHours = ehDelta;
       } else {
-        // Fallback: sum driving + idling durations across trips
-        usageHours = devTrips.reduce((s, t) => {
-          return s + durationToHours(t.drivingDuration) + durationToHours(t.idlingDuration);
-        }, 0);
+        usageHours = devTrips.reduce((s, t) =>
+          s + durationToHours(t.drivingDuration) + durationToHours(t.idlingDuration), 0);
       }
 
-      // Miles: sum all trip distances (value is in km from API)
-      const miles = devTrips.reduce((s, t) => s + (t.distance || 0), 0) * KM_TO_MI;
-
-      // Fuel (L → gal)
+      const miles  = devTrips.reduce((s, t) => s + (t.distance || 0), 0) * KM_TO_MI;
       const fuelGal = fuelData[id] != null ? fuelData[id] * L_TO_GAL : null;
+      const kWh     = evData[id]   != null ? evData[id]               : null;
 
-      // EV energy (kWh, already in kWh from API)
-      const kWh = evData[id] != null ? evData[id] : null;
-
-      // Fuel+EV per hour
       let perHour = null;
-      if (usageHours > 0) {
-        const totalFuelEq = (fuelGal || 0) + (kWh != null ? kWh * 0.033695 : 0); // kWh → gal-eq
-        if (fuelGal != null || kWh != null) perHour = totalFuelEq / usageHours;
+      if (usageHours > 0 && (fuelGal != null || kWh != null)) {
+        perHour = ((fuelGal || 0) + (kWh != null ? kWh * 0.033695 : 0)) / usageHours;
       }
 
       return {
-        name: first.device.name || id,
+        name: deviceNames[id] || first.device.name || id,
         usageHours,
         miles,
         fuelGal,
@@ -282,7 +338,6 @@ async function runReport() {
       };
     });
 
-    // Sort by name
     rows.sort((a, b) => a.name.localeCompare(b.name));
     _tableData = rows;
 
@@ -296,7 +351,7 @@ async function runReport() {
   }
 }
 
-// ─── Fetch cumulative StatusData delta per device ────────────────────────────
+// ─── StatusData delta per device ─────────────────────────────────────────────
 async function getStatusDataDelta(diagnosticId, from, to) {
   let data;
   try {
@@ -310,10 +365,9 @@ async function getStatusDataDelta(diagnosticId, from, to) {
       resultsLimit: 50000
     });
   } catch (_) {
-    return {}; // diagnostic not present in this database
+    return {};
   }
 
-  // Group by device, calc (max - min) for cumulative odometer-style counters
   const byDevice = {};
   data.forEach(sd => {
     const id = sd.device.id;
@@ -344,21 +398,16 @@ function renderTable(rows) {
     if (r.fuelGal != null) { totFuel += r.fuelGal; hasFuel = true; }
     if (r.kWh     != null) { totKwh  += r.kWh;     hasKwh  = true; }
 
-    const perHourStr = r.perHour != null
-      ? fmt(r.perHour, 3) + " gal-eq/hr"
-      : '<span class="na">—</span>';
-
     tbody.insertAdjacentHTML("beforeend", `<tr>
       <td>${escHtml(r.name)}</td>
       <td>${fmt(r.usageHours, 2)}</td>
       <td>${fmt(r.miles, 1)}</td>
       <td>${r.fuelGal != null ? fmt(r.fuelGal, 2) : '<span class="na">—</span>'}</td>
       <td>${r.kWh     != null ? fmt(r.kWh, 2)     : '<span class="na">—</span>'}</td>
-      <td>${perHourStr}</td>
+      <td>${r.perHour != null ? fmt(r.perHour, 3) + " gal-eq/hr" : '<span class="na">—</span>'}</td>
     </tr>`);
   });
 
-  // Totals
   const totPerHour = totHours > 0 && (hasFuel || hasKwh)
     ? fmt((totFuel + totKwh * 0.033695) / totHours, 3) + " gal-eq/hr"
     : '<span class="na">—</span>';
@@ -368,7 +417,7 @@ function renderTable(rows) {
     <td>${fmt(totHours, 2)}</td>
     <td>${fmt(totMiles, 1)}</td>
     <td>${hasFuel ? fmt(totFuel, 2) : '<span class="na">—</span>'}</td>
-    <td>${hasKwh  ? fmt(totKwh,  2) : '<span class="na">—</span>'}</td>
+    <td>${hasKwh  ? fmt(totKwh, 2)  : '<span class="na">—</span>'}</td>
     <td>${totPerHour}</td>
   </tr>`;
 
@@ -378,7 +427,7 @@ function renderTable(rows) {
 // ─── CSV export ──────────────────────────────────────────────────────────────
 function exportCsv() {
   const dateStr = document.getElementById("reportDate").value;
-  const header = ["Asset Name", "Usage Hours", "Miles Traveled", "Fuel Used (gal)", "EV Energy (kWh)", "Fuel+EV per Hour (gal-eq)"];
+  const header = ["Asset Name","Usage Hours","Miles Traveled","Fuel Used (gal)","EV Energy (kWh)","Fuel+EV per Hour (gal-eq)"];
   const lines = [header.join(",")];
 
   _tableData.forEach(r => {
@@ -409,10 +458,9 @@ function callApi(method, params) {
   });
 }
 
-// "HH:MM:SS" or decimal days string → hours
 function durationToHours(d) {
   if (!d) return 0;
-  if (typeof d === "number") return d * 24; // Excel day fraction
+  if (typeof d === "number") return d * 24;
   const parts = String(d).split(":");
   if (parts.length === 3) {
     return parseInt(parts[0]) + parseInt(parts[1]) / 60 + parseFloat(parts[2]) / 3600;
@@ -433,7 +481,6 @@ function setError(msg) {
   el.textContent = msg;
   el.style.display = msg ? "block" : "none";
 }
-
 </script>
 </body>
 </html>
