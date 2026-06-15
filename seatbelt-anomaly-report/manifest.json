@@ -1,0 +1,16 @@
+{
+  "name": "Seatbelt Anomaly Report",
+  "supportEmail": "michaelolsen@geotab.com",
+  "version": "1.0.0",
+  "items": [
+    {
+      "path": "ActivityLink",
+      "url": "https://michaelolsen-geotab.github.io/geotab-addins/seatbelt-anomaly-report/index.html",
+      "icon": "https://michaelolsen-geotab.github.io/geotab-addins/holt-daily-report/icon.svg",
+      "menuName": {
+        "en": "Seatbelt Anomaly Report"
+      }
+    }
+  ],
+  "isSigned": false
+}

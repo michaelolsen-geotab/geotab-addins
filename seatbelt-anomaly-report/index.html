@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Seatbelt Anomaly Report</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      color: #333;
+      background: #f5f6fa;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 18px;
+      color: #1a1a2e;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #dde1ea;
+      border-radius: 6px;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: flex-end;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    select, input[type="date"], input[type="number"] {
+      height: 34px;
+      border: 1px solid #c8cdd8;
+      border-radius: 4px;
+      padding: 0 10px;
+      font-size: 14px;
+      color: #333;
+      background: #fff;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    select:focus, input:focus {
+      border-color: #4a6fa5;
+    }
+
+    select { min-width: 220px; }
+    input[type="date"] { min-width: 140px; }
+    input[type="number"] { width: 90px; }
+
+    .btn {
+      height: 34px;
+      padding: 0 18px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    .btn-primary { background: #4a6fa5; color: #fff; }
+    .btn-primary:hover { background: #3a5a8f; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-secondary { background: #e8eaf0; color: #444; }
+    .btn-secondary:hover { background: #d4d8e4; }
+    .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .actions { display: flex; gap: 10px; align-items: center; }
+
+    #status {
+      font-size: 13px;
+      color: #666;
+      min-height: 18px;
+    }
+    #status.error { color: #c0392b; }
+    #status.success { color: #27ae60; }
+
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .results-header h2 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    #row-count {
+      font-size: 12px;
+      color: #888;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid #dde1ea;
+      border-radius: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead th {
+      background: #f0f2f8;
+      padding: 9px 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #444;
+      border-bottom: 1px solid #dde1ea;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    thead th:hover { background: #e4e7f3; }
+
+    thead th.sort-asc::after  { content: " ↑"; font-size: 11px; }
+    thead th.sort-desc::after { content: " ↓"; font-size: 11px; }
+
+    tbody tr:nth-child(even) { background: #f9fafc; }
+    tbody tr:hover { background: #eef1fb; }
+
+    tbody td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #eee;
+      white-space: nowrap;
+    }
+
+    tbody tr:last-child td { border-bottom: none; }
+
+    #empty-msg {
+      text-align: center;
+      padding: 32px;
+      color: #aaa;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Seatbelt Anomaly Report</h1>
+
+  <div class="card">
+    <div class="controls">
+      <div class="field">
+        <label for="reportType">Report Type</label>
+        <select id="reportType">
+          <option value="GetUnbuckledTrips">Always Buckled (Seatbelt Clipped In)</option>
+          <option value="GetBuckledTrips">Always Unbuckled (Never Buckled)</option>
+          <option value="GetHighFrequencyTrips">High Frequency Changes</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="dateFrom">From Date</label>
+        <input type="date" id="dateFrom" />
+      </div>
+
+      <div class="field">
+        <label for="dateTo">To Date</label>
+        <input type="date" id="dateTo" />
+      </div>
+
+      <div class="field">
+        <label for="threshold">Min % Threshold</label>
+        <input type="number" id="threshold" value="0.90" min="0.10" max="1.00" step="0.05" />
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="runBtn" onclick="runReport()">Run Report</button>
+        <button class="btn btn-secondary" id="exportBtn" onclick="exportCsv()" disabled>Export CSV</button>
+      </div>
+    </div>
+
+    <div style="margin-top: 12px;">
+      <span id="status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="results-header">
+      <h2>Results</h2>
+      <span id="row-count"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="results-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body">
+          <tr><td colspan="9" id="empty-msg">Run a report to see results.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    /* ── state ── */
+    let allRows = [];
+    let sortCol = null;
+    let sortDir = 1;
+
+    const FUNCTION_LABELS = {
+      GetUnbuckledTrips:     "BuckledTripPercentage",
+      GetBuckledTrips:       "UnbuckledTripPercentage",
+      GetHighFrequencyTrips: "HighFrequencyTripPercentage"
+    };
+
+    const FUNCTION_HEADERS = {
+      GetUnbuckledTrips:     "Always Buckled %",
+      GetBuckledTrips:       "Always Unbuckled %",
+      GetHighFrequencyTrips: "High Freq %"
+    };
+
+    /* ── init defaults ── */
+    (function initDates() {
+      const today = new Date();
+      const prior = new Date();
+      prior.setDate(today.getDate() - 7);
+      document.getElementById("dateTo").value   = fmt(today);
+      document.getElementById("dateFrom").value = fmt(prior);
+    })();
+
+    function fmt(d) {
+      return d.toISOString().slice(0, 10);
+    }
+
+    function dateRange(from, to) {
+      const dates = [];
+      const cur = new Date(from + "T00:00:00");
+      const end = new Date(to   + "T00:00:00");
+      while (cur <= end) {
+        dates.push(fmt(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      return dates;
+    }
+
+    /* ── status helpers ── */
+    function setStatus(msg, cls) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = cls || "";
+    }
+
+    /* ── API call wrapper ── */
+    function callDay(functionName, date, percentage) {
+      return new Promise((resolve, reject) => {
+        api.call(
+          "GetBigDataResults",
+          {
+            serviceName: "iic-amazon-seatbelt-anomalies-us",
+            functionName,
+            functionParameters: { StatusDate: date, percentage },
+            customerData: true,
+            environment: "prod"
+          },
+          result  => resolve(Array.isArray(result) ? result : []),
+          err     => reject(err)
+        );
+      });
+    }
+
+    /* ── run report ── */
+    async function runReport() {
+      const functionName = document.getElementById("reportType").value;
+      const from         = document.getElementById("dateFrom").value;
+      const to           = document.getElementById("dateTo").value;
+      const percentage   = parseFloat(document.getElementById("threshold").value);
+
+      if (!from || !to) { setStatus("Please select both From and To dates.", "error"); return; }
+      if (from > to)    { setStatus("From date must be on or before To date.", "error"); return; }
+      if (isNaN(percentage) || percentage < 0.1 || percentage > 1) {
+        setStatus("Threshold must be between 0.10 and 1.00.", "error"); return;
+      }
+
+      const dates = dateRange(from, to);
+      if (dates.length > 90) { setStatus("Date range cannot exceed 90 days.", "error"); return; }
+
+      const runBtn   = document.getElementById("runBtn");
+      const exportBtn = document.getElementById("exportBtn");
+      runBtn.disabled = true;
+      exportBtn.disabled = true;
+      allRows = [];
+      renderTable(functionName, []);
+      setStatus(`Querying ${dates.length} day(s)…`);
+
+      /* run in batches of 5 */
+      const BATCH = 5;
+      let completed = 0;
+      let errors = 0;
+
+      for (let i = 0; i < dates.length; i += BATCH) {
+        const batch = dates.slice(i, i + BATCH);
+        const results = await Promise.allSettled(
+          batch.map(d => callDay(functionName, d, percentage))
+        );
+        results.forEach(r => {
+          completed++;
+          if (r.status === "fulfilled") {
+            allRows = allRows.concat(r.value);
+          } else {
+            errors++;
+          }
+        });
+        setStatus(`Loaded ${completed} of ${dates.length} days… (${allRows.length} rows so far)`);
+      }
+
+      renderTable(functionName, allRows);
+      runBtn.disabled = false;
+
+      if (allRows.length > 0) {
+        exportBtn.disabled = false;
+        setStatus(
+          `Done. ${allRows.length} row(s) returned across ${dates.length} day(s).${errors ? ` (${errors} day(s) failed)` : ""}`,
+          "success"
+        );
+      } else {
+        setStatus(
+          errors
+            ? `No results. ${errors} day(s) returned an error — check API access.`
+            : "No results for the selected criteria.",
+          errors ? "error" : ""
+        );
+      }
+    }
+
+    /* ── render table ── */
+    function renderTable(functionName, rows) {
+      const anomalyHeader = FUNCTION_HEADERS[functionName] || "Anomaly %";
+      const anomalyKey    = FUNCTION_LABELS[functionName]  || "AnomalyPercentage";
+
+      const COLS = [
+        { key: "DatabaseName",   label: "Database"       },
+        { key: "TripDate",       label: "Trip Date"      },
+        { key: "DeviceId",       label: "Device ID"      },
+        { key: "Vin",            label: "VIN"            },
+        { key: "Make",           label: "Make"           },
+        { key: "Model",          label: "Model"          },
+        { key: "Year",           label: "Year"           },
+        { key: "DailyTripCount", label: "Daily Trips"    },
+        { key: anomalyKey,       label: anomalyHeader    }
+      ];
+
+      /* header */
+      const head = document.getElementById("table-head");
+      head.innerHTML = "<tr>" + COLS.map((c, i) => {
+        let cls = "";
+        if (sortCol === i) cls = sortDir === 1 ? "sort-asc" : "sort-desc";
+        return `<th class="${cls}" onclick="sortBy(${i})">${c.label}</th>`;
+      }).join("") + "</tr>";
+
+      /* body */
+      const body = document.getElementById("table-body");
+      document.getElementById("row-count").textContent = rows.length ? `${rows.length} rows` : "";
+
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="${COLS.length}" id="empty-msg">No data to display.</td></tr>`;
+        return;
+      }
+
+      /* apply sort */
+      const sorted = [...rows];
+      if (sortCol !== null) {
+        const key = COLS[sortCol].key;
+        sorted.sort((a, b) => {
+          const av = a[key] ?? "", bv = b[key] ?? "";
+          return av < bv ? -sortDir : av > bv ? sortDir : 0;
+        });
+      }
+
+      body.innerHTML = sorted.map(row =>
+        "<tr>" + COLS.map(c => {
+          let val = row[c.key] ?? "";
+          if (c.key === anomalyKey && typeof val === "number") {
+            val = (val * 100).toFixed(1) + "%";
+          }
+          return `<td>${escHtml(String(val))}</td>`;
+        }).join("") + "</tr>"
+      ).join("");
+    }
+
+    /* ── sort ── */
+    function sortBy(colIdx) {
+      const functionName = document.getElementById("reportType").value;
+      if (sortCol === colIdx) {
+        sortDir = -sortDir;
+      } else {
+        sortCol = colIdx;
+        sortDir = 1;
+      }
+      renderTable(functionName, allRows);
+    }
+
+    /* ── CSV export ── */
+    function exportCsv() {
+      if (!allRows.length) return;
+      const functionName = document.getElementById("reportType").value;
+      const anomalyKey   = FUNCTION_LABELS[functionName] || "AnomalyPercentage";
+      const anomalyLabel = FUNCTION_HEADERS[functionName] || "Anomaly %";
+
+      const COLS = [
+        { key: "DatabaseName",   label: "Database"    },
+        { key: "TripDate",       label: "Trip Date"   },
+        { key: "DeviceId",       label: "Device ID"   },
+        { key: "Vin",            label: "VIN"         },
+        { key: "Make",           label: "Make"        },
+        { key: "Model",          label: "Model"       },
+        { key: "Year",           label: "Year"        },
+        { key: "DailyTripCount", label: "Daily Trips" },
+        { key: anomalyKey,       label: anomalyLabel  }
+      ];
+
+      const lines = [
+        COLS.map(c => csvCell(c.label)).join(","),
+        ...allRows.map(row =>
+          COLS.map(c => {
+            let val = row[c.key] ?? "";
+            if (c.key === anomalyKey && typeof val === "number") val = (val * 100).toFixed(1);
+            return csvCell(String(val));
+          }).join(",")
+        )
+      ];
+
+      const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      const from = document.getElementById("dateFrom").value;
+      const to   = document.getElementById("dateTo").value;
+      a.href     = url;
+      a.download = `seatbelt-anomaly-${from}-to-${to}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function csvCell(v) {
+      if (v.includes(",") || v.includes('"') || v.includes("\n")) {
+        return '"' + v.replace(/"/g, '""') + '"';
+      }
+      return v;
+    }
+
+    function escHtml(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+  </script>
+</body>
+</html>
