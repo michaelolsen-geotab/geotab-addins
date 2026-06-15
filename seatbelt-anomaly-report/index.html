@@ -282,8 +282,22 @@
             customerData: true,
             environment: "prod"
           },
-          result  => resolve(Array.isArray(result) ? result : []),
-          err     => reject(err)
+          result => {
+            console.log(`[seatbelt] ${date} raw result:`, result);
+            if (Array.isArray(result)) {
+              resolve(result);
+            } else if (result && typeof result === "object") {
+              /* some BigData endpoints wrap rows under a key */
+              const rows = result.data || result.rows || result.results || result.value || [];
+              resolve(Array.isArray(rows) ? rows : []);
+            } else {
+              resolve([]);
+            }
+          },
+          err => {
+            console.error(`[seatbelt] ${date} error:`, err);
+            reject(err instanceof Error ? err : new Error(JSON.stringify(err)));
+          }
         );
       });
     }
