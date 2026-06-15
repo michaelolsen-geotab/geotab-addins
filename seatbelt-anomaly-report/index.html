@@ -196,8 +196,8 @@
       </div>
 
       <div class="actions">
-        <button class="btn btn-primary" id="runBtn" onclick="runReport()">Run Report</button>
-        <button class="btn btn-secondary" id="exportBtn" onclick="exportCsv()" disabled>Export CSV</button>
+        <button class="btn btn-primary" id="runBtn">Run Report</button>
+        <button class="btn btn-secondary" id="exportBtn" disabled>Export CSV</button>
       </div>
     </div>
 
@@ -222,6 +222,28 @@
   </div>
 
   <script>
+    /* ── MyGeotab add-in registration ── */
+    let _api = null;
+
+    geotab.addin.seatbeltAnomalyReport = function (api, state) {
+      _api = api;
+      return {
+        initialize(freshApi, freshState, callback) {
+          _api = freshApi;
+          const today = new Date();
+          const prior = new Date();
+          prior.setDate(today.getDate() - 7);
+          document.getElementById("dateTo").value   = fmt(today);
+          document.getElementById("dateFrom").value = fmt(prior);
+          document.getElementById("runBtn").addEventListener("click", runReport);
+          document.getElementById("exportBtn").addEventListener("click", exportCsv);
+          callback();
+        },
+        focus(freshApi, freshState) { _api = freshApi; },
+        blur() {}
+      };
+    };
+
     /* ── state ── */
     let allRows = [];
     let sortCol = null;
@@ -239,15 +261,6 @@
       GetHighFrequencyTrips: "High Freq %"
     };
 
-    /* ── init defaults ── */
-    (function initDates() {
-      const today = new Date();
-      const prior = new Date();
-      prior.setDate(today.getDate() - 7);
-      document.getElementById("dateTo").value   = fmt(today);
-      document.getElementById("dateFrom").value = fmt(prior);
-    })();
-
     function fmt(d) {
       return d.toISOString().slice(0, 10);
     }
@@ -263,7 +276,6 @@
       return dates;
     }
 
-    /* ── status helpers ── */
     function setStatus(msg, cls) {
       const el = document.getElementById("status");
       el.textContent = msg;
@@ -273,7 +285,7 @@
     /* ── API call wrapper ── */
     function callDay(functionName, date, percentage) {
       return new Promise((resolve, reject) => {
-        api.call(
+        _api.call(
           "GetBigDataResults",
           {
             serviceName: "iic-amazon-seatbelt-anomalies-us",
@@ -287,7 +299,6 @@
             if (Array.isArray(result)) {
               resolve(result);
             } else if (result && typeof result === "object") {
-              /* some BigData endpoints wrap rows under a key */
               const rows = result.data || result.rows || result.results || result.value || [];
               resolve(Array.isArray(rows) ? rows : []);
             } else {
@@ -311,29 +322,28 @@
 
       if (!from || !to) { setStatus("Please select both From and To dates.", "error"); return; }
       if (from > to)    { setStatus("From date must be on or before To date.", "error"); return; }
-      if (isNaN(percentage) || percentage < 0.1 || percentage > 1) {
-        setStatus("Threshold must be between 0.10 and 1.00.", "error"); return;
+      if (isNaN(percentage) || percentage < 0.01 || percentage > 1) {
+        setStatus("Threshold must be between 0.01 and 1.00.", "error"); return;
       }
 
       const dates = dateRange(from, to);
       if (dates.length > 90) { setStatus("Date range cannot exceed 90 days.", "error"); return; }
 
-      const runBtn   = document.getElementById("runBtn");
+      const runBtn    = document.getElementById("runBtn");
       const exportBtn = document.getElementById("exportBtn");
-      runBtn.disabled = true;
+      runBtn.disabled    = true;
       exportBtn.disabled = true;
       allRows = [];
       renderTable(functionName, []);
       setStatus(`Querying ${dates.length} day(s)…`);
 
-      /* run in batches of 5 */
       const BATCH = 5;
       let completed = 0;
-      let errors = 0;
+      let errors    = 0;
       let firstError = null;
 
       for (let i = 0; i < dates.length; i += BATCH) {
-        const batch = dates.slice(i, i + BATCH);
+        const batch   = dates.slice(i, i + BATCH);
         const results = await Promise.allSettled(
           batch.map(d => callDay(functionName, d, percentage))
         );
@@ -377,18 +387,17 @@
       const anomalyKey    = FUNCTION_LABELS[functionName]  || "AnomalyPercentage";
 
       const COLS = [
-        { key: "DatabaseName",   label: "Database"       },
-        { key: "TripDate",       label: "Trip Date"      },
-        { key: "DeviceId",       label: "Device ID"      },
-        { key: "Vin",            label: "VIN"            },
-        { key: "Make",           label: "Make"           },
-        { key: "Model",          label: "Model"          },
-        { key: "Year",           label: "Year"           },
-        { key: "DailyTripCount", label: "Daily Trips"    },
-        { key: anomalyKey,       label: anomalyHeader    }
+        { key: "DatabaseName",   label: "Database"    },
+        { key: "TripDate",       label: "Trip Date"   },
+        { key: "DeviceId",       label: "Device ID"   },
+        { key: "Vin",            label: "VIN"         },
+        { key: "Make",           label: "Make"        },
+        { key: "Model",          label: "Model"       },
+        { key: "Year",           label: "Year"        },
+        { key: "DailyTripCount", label: "Daily Trips" },
+        { key: anomalyKey,       label: anomalyHeader }
       ];
 
-      /* header */
       const head = document.getElementById("table-head");
       head.innerHTML = "<tr>" + COLS.map((c, i) => {
         let cls = "";
@@ -396,7 +405,6 @@
         return `<th class="${cls}" onclick="sortBy(${i})">${c.label}</th>`;
       }).join("") + "</tr>";
 
-      /* body */
       const body = document.getElementById("table-body");
       document.getElementById("row-count").textContent = rows.length ? `${rows.length} rows` : "";
 
@@ -405,7 +413,6 @@
         return;
       }
 
-      /* apply sort */
       const sorted = [...rows];
       if (sortCol !== null) {
         const key = COLS[sortCol].key;
@@ -429,12 +436,8 @@
     /* ── sort ── */
     function sortBy(colIdx) {
       const functionName = document.getElementById("reportType").value;
-      if (sortCol === colIdx) {
-        sortDir = -sortDir;
-      } else {
-        sortCol = colIdx;
-        sortDir = 1;
-      }
+      sortDir = sortCol === colIdx ? -sortDir : 1;
+      sortCol = colIdx;
       renderTable(functionName, allRows);
     }
 
