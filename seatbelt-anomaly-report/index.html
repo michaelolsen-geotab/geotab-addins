@@ -299,8 +299,16 @@
             if (Array.isArray(result)) {
               resolve(result);
             } else if (result && typeof result === "object") {
-              const rows = result.data || result.rows || result.results || result.value || [];
-              resolve(Array.isArray(rows) ? rows : []);
+              const inner = result.apiResult || result.data || result.rows || result.results || result.value;
+              console.log(`[seatbelt] inner:`, inner);
+              if (Array.isArray(inner)) {
+                resolve(inner);
+              } else if (inner && typeof inner === "object") {
+                const rows = inner.data || inner.rows || inner.results || inner.value || Object.values(inner).find(Array.isArray) || [];
+                resolve(Array.isArray(rows) ? rows : []);
+              } else {
+                resolve([]);
+              }
             } else {
               resolve([]);
             }
