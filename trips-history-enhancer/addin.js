@@ -38,8 +38,8 @@
     '[class*="popup-content"]',
   ].join(', ');
 
-  // Google Maps renders into a div — we find the map instance by API, not by DOM selector.
-  // SEL_MAP is only used as a fallback for Leaflet; Google Maps detection is API-based.
+  // Note: the trips history map runs in a cross-origin iframe and cannot be panned
+  // programmatically from an add-in. Search results open in Google Maps instead.
 
   // ── Internal state ──────────────────────────────────────────────────────────
   const WIDGET_ID  = 'gia-trips-enhancer-search';
@@ -51,78 +51,9 @@
 
   // ── Map utilities ───────────────────────────────────────────────────────────
 
-  // ── Map detection (Google Maps) ─────────────────────────────────────────────
-  // MyGeotab v11 uses Google Maps (confirmed via map.js / main.js in the stack).
-  // The map instance lives inside a sandboxed iframe and is not directly reachable
-  // from the parent window. Instead we use the Google Maps JS API itself, which
-  // is available inside every iframe context that loads map.js.
-  //
-  // google.maps.Map instances expose: getCenter(), setCenter(), setZoom(), getZoom().
-
-  function collectContexts() {
-    const ctxs = [window];
-    document.querySelectorAll('iframe').forEach(f => {
-      try { if (f.contentWindow) ctxs.push(f.contentWindow); } catch (_) {}
-    });
-    return ctxs;
-  }
-
-  function isGoogleMap(v) {
-    return v
-      && typeof v === 'object'
-      && typeof v.panTo      === 'function'
-      && typeof v.setCenter  === 'function'
-      && typeof v.getCenter  === 'function'
-      && typeof v.setZoom    === 'function';
-  }
-
-  function findGoogleMap() {
-    for (const ctx of collectContexts()) {
-      try {
-        // Strategy A: google.maps registry (Maps JS API ≥ 3.45 stores instances here).
-        if (ctx.google && ctx.google.maps && ctx.google.maps.Map) {
-          // Walk document elements to find the map div, then retrieve the instance.
-          ctx.document.querySelectorAll('[class*="gm-style"]').forEach(el => {
-            // The Maps JS API attaches the Map instance to its container div.
-            if (el.__gm && isGoogleMap(el.__gm.ma)) return el.__gm.ma;
-          });
-        }
-
-        // Strategy B: scan window properties (map stored as a module-level var).
-        const keys = Object.keys(ctx);
-        for (let i = 0; i < Math.min(keys.length, 500); i++) {
-          try {
-            const v = ctx[keys[i]];
-            if (isGoogleMap(v)) return v;
-          } catch (_) {}
-        }
-
-        // Strategy C: one level into namespaced objects.
-        for (let i = 0; i < Math.min(keys.length, 300); i++) {
-          try {
-            const obj = ctx[keys[i]];
-            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
-            const sub = Object.keys(obj);
-            for (let j = 0; j < Math.min(sub.length, 60); j++) {
-              try {
-                const v = obj[sub[j]];
-                if (isGoogleMap(v)) return v;
-              } catch (_) {}
-            }
-          } catch (_) {}
-        }
-      } catch (_) { /* cross-origin or restricted — skip */ }
-    }
-    return null;
-  }
-
-  function panMapTo(lat, lng) {
-    const map = findGoogleMap();
-    if (!map) return false;
-    map.panTo({ lat, lng });
-    const zoom = map.getZoom();
-    if (zoom < 14) map.setZoom(14);
-    return true;
+  function openInGoogleMaps(lat, lng, label) {
+    const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+    window.open(url, '_blank', 'noopener');
   }
 
   // ── Geocoding (Nominatim / OpenStreetMap — no API key required) ─────────────
@@ -189,11 +120,9 @@
       try {
         const result = await geocode(q);
         if (result) {
-          const panned = panMapTo(result.lat, result.lng);
           status.title       = result.label;
-          status.textContent = panned
-            ? '✓ Found'
-            : '✓ Found (map not detected — pan manually)';
+          status.textContent = '✓ Opening in Google Maps…';
+          openInGoogleMaps(result.lat, result.lng, result.label);
         } else {
           status.textContent = 'No results';
         }
