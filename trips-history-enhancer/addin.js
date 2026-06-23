@@ -53,12 +53,14 @@
   // ── Map utilities ───────────────────────────────────────────────────────────
 
   function getLeafletMap() {
-    const container = document.querySelector(SEL_MAP);
-    if (!container) return null;
+    // MyGeotab loads the trips history map inside an iframe (via loadFrame).
+    // The iframe has allow-same-origin so we can access its contentWindow.
+    // Build a list of window contexts to search: parent first, then all iframes.
+    const contexts = [window];
+    document.querySelectorAll('iframe').forEach(f => {
+      try { if (f.contentWindow) contexts.push(f.contentWindow); } catch (_) {}
+    });
 
-    // Predicate: does this value look like a Leaflet Map attached to our container?
-    // Uses classList check rather than reference equality so nested/proxied
-    // containers still match.
     function isMap(v) {
       return v
         && typeof v === 'object'
@@ -69,32 +71,30 @@
         && v._container.classList.contains('leaflet-container');
     }
 
-    // Strategy A: some Leaflet builds attach the instance directly to the element.
-    if (isMap(container._leaflet)) return container._leaflet;
-
-    // Strategy B: direct window property (works when map is a module-level var).
-    const winKeys = Object.keys(window);
-    for (let i = 0; i < Math.min(winKeys.length, 500); i++) {
+    for (const ctx of contexts) {
       try {
-        const v = window[winKeys[i]];
-        if (isMap(v)) return v;
-      } catch (_) { /* skip non-enumerable / getters that throw */ }
-    }
+        // Strategy A: Leaflet instance attached directly to the container element.
+        const container = ctx.document.querySelector(SEL_MAP);
+        if (container && isMap(container._leaflet)) return container._leaflet;
 
-    // Strategy C: one level deep into window objects.
-    // MyGeotab stores the map inside a namespaced object, not directly on window.
-    for (let i = 0; i < Math.min(winKeys.length, 300); i++) {
-      try {
-        const obj = window[winKeys[i]];
-        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
-        const subKeys = Object.keys(obj);
-        for (let j = 0; j < Math.min(subKeys.length, 60); j++) {
+        // Strategy B: direct property on this window context.
+        const keys = Object.keys(ctx);
+        for (let i = 0; i < Math.min(keys.length, 500); i++) {
+          try { if (isMap(ctx[keys[i]])) return ctx[keys[i]]; } catch (_) {}
+        }
+
+        // Strategy C: one level deep (map stored in a namespaced object).
+        for (let i = 0; i < Math.min(keys.length, 300); i++) {
           try {
-            const v = obj[subKeys[j]];
-            if (isMap(v)) return v;
+            const obj = ctx[keys[i]];
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+            const sub = Object.keys(obj);
+            for (let j = 0; j < Math.min(sub.length, 60); j++) {
+              try { if (isMap(obj[sub[j]])) return obj[sub[j]]; } catch (_) {}
+            }
           } catch (_) {}
         }
-      } catch (_) {}
+      } catch (_) { /* cross-origin iframe or restricted context — skip */ }
     }
 
     return null;
