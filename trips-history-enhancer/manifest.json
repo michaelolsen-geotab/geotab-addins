@@ -1,0 +1,16 @@
+{
+  "name": "Trips History Enhancer",
+  "supportEmail": "michaelolsen@geotab.com",
+  "version": "1.0.0",
+  "items": [
+    {
+      "page": "tripsHistory",
+      "click": "https://michaelolsen-geotab.github.io/geotab-addins/trips-history-enhancer/addin.js",
+      "buttonName": {
+        "en": "Show Seconds"
+      },
+      "noIcon": true
+    }
+  ],
+  "isSigned": false
+}
