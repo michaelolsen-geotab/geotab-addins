@@ -387,25 +387,42 @@
     if (_observer) return;
     _observer = new MutationObserver(mutations => {
       for (const mut of mutations) {
-        for (const node of mut.addedNodes) {
-          if (node.nodeType !== Node.ELEMENT_NODE) continue;
-          // Cheap text-content check before spinning up the async upgrade.
-          if (TIME_RE.test(node.textContent)) {
-            upgradeTooltipTimestamps(node).catch(() => {});
+        // Case 1: element freshly added to the DOM.
+        if (mut.type === 'childList') {
+          for (const node of mut.addedNodes) {
+            if (node.nodeType !== Node.ELEMENT_NODE) continue;
+            if (TIME_RE.test(node.textContent)) {
+              upgradeTooltipTimestamps(node).catch(() => {});
+            }
+          }
+        }
+        // Case 2: existing element made visible via a style/class toggle.
+        // MyGeotab pre-renders some tooltips and flips display/visibility on hover.
+        if (mut.type === 'attributes' && mut.target.nodeType === Node.ELEMENT_NODE) {
+          const el = mut.target;
+          if (TIME_RE.test(el.textContent)) {
+            upgradeTooltipTimestamps(el).catch(() => {});
           }
         }
       }
     });
 
+    const OBS_OPTS = {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class'],  // only fire for visibility-related changes
+    };
+
     // Observe our own iframe document.
-    _observer.observe(document.body, { childList: true, subtree: true });
+    _observer.observe(document.body, OBS_OPTS);
 
     // Observe the parent page document — this is where MyGeotab renders the
     // stop hover dialog. Fails silently if the parent is cross-origin.
     try {
       const parentBody = window.parent.document.body;
       if (parentBody && parentBody !== document.body) {
-        _observer.observe(parentBody, { childList: true, subtree: true });
+        _observer.observe(parentBody, OBS_OPTS);
       }
     } catch (_) { /* cross-origin parent — skip */ }
   }
