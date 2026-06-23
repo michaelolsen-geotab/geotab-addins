@@ -39,8 +39,8 @@
   ].join(', ');
 
   // Note: the trips history map runs in a cross-origin iframe and cannot be panned
-  // programmatically. Instead we navigate to MyGeotab's live map page (same origin)
-  // carrying device + date context, so the user sees their fleet centered at the result.
+  // programmatically. Instead we show a draggable floating mini-map overlay using
+  // an OpenStreetMap embed, so the user stays on the trips history page.
 
   // ── Internal state ──────────────────────────────────────────────────────────
   const WIDGET_ID  = 'gia-trips-enhancer-search';
@@ -52,27 +52,108 @@
 
   // ── Map utilities ───────────────────────────────────────────────────────────
 
-  function navigateToMap(lat, lng) {
-    if (!_state) return false;
-    const st = _state.getState ? _state.getState() : {};
+  // ── Floating mini-map overlay ────────────────────────────────────────────────
+  // Renders an OpenStreetMap iframe in a draggable panel over the trips history page.
+  // The user stays on the page and can see the searched location alongside trip data.
 
-    // Build the parameter object for MyGeotab's map page.
-    // 'location' is a known map page parameter; device/dates preserve fleet context.
-    const params = { location: { lat, lng } };
+  const MINIMAP_ID = 'gia-trips-enhancer-minimap';
 
-    const deviceId = (st.device && (st.device.id || st.device)) || st.deviceId;
-    if (deviceId) params.deviceId = deviceId;
+  function showMiniMap(lat, lng, label) {
+    // Remove any existing mini-map.
+    const existing = document.getElementById(MINIMAP_ID);
+    if (existing) existing.remove();
 
-    const dateRaw = (st.dates && st.dates[0]) || st.date || st.fromDate;
-    if (dateRaw) params.date = dateRaw;
+    const panel = document.createElement('div');
+    panel.id = MINIMAP_ID;
+    panel.style.cssText = [
+      'position:fixed',
+      'top:80px',
+      'right:24px',
+      'width:380px',
+      'height:320px',
+      'background:#fff',
+      'border:1px solid #bbb',
+      'border-radius:6px',
+      'box-shadow:0 4px 16px rgba(0,0,0,.25)',
+      'display:flex',
+      'flex-direction:column',
+      'z-index:99999',
+      'font-family:sans-serif',
+    ].join(';');
 
-    try {
-      _state.gotoPage('map', params);
-      return true;
-    } catch (e) {
-      console.error('[TripsEnhancer] gotoPage error:', e);
-      return false;
-    }
+    // Title bar (doubles as drag handle).
+    const titleBar = document.createElement('div');
+    titleBar.style.cssText = [
+      'display:flex',
+      'align-items:center',
+      'justify-content:space-between',
+      'padding:6px 10px',
+      'background:#0078d4',
+      'color:#fff',
+      'border-radius:6px 6px 0 0',
+      'cursor:move',
+      'user-select:none',
+      'font-size:12px',
+      'gap:8px',
+    ].join(';');
+
+    const titleText = document.createElement('span');
+    titleText.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
+    titleText.title = label;
+    titleText.textContent = label.split(',').slice(0, 2).join(',');  // show first two parts
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = [
+      'background:none',
+      'border:none',
+      'color:#fff',
+      'cursor:pointer',
+      'font-size:14px',
+      'line-height:1',
+      'padding:0 2px',
+      'flex-shrink:0',
+    ].join(';');
+    closeBtn.addEventListener('click', () => panel.remove());
+
+    titleBar.appendChild(titleText);
+    titleBar.appendChild(closeBtn);
+
+    // OSM embed iframe — uses bbox centred on the result with a marker.
+    const zoom = 15;
+    const delta = 0.01;  // rough degree offset for bbox
+    const bbox = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
+    const src = `https://www.openstreetmap.org/export/embed.html`
+      + `?bbox=${bbox}&layer=mapnik&marker=${lat},${lng}`;
+
+    const mapFrame = document.createElement('iframe');
+    mapFrame.src = src;
+    mapFrame.style.cssText = 'flex:1;border:none;border-radius:0 0 6px 6px;';
+    mapFrame.setAttribute('loading', 'lazy');
+
+    panel.appendChild(titleBar);
+    panel.appendChild(mapFrame);
+    document.body.appendChild(panel);
+
+    // ── Drag behaviour ──────────────────────────────────────────────────────
+    let dragging = false, ox = 0, oy = 0;
+
+    titleBar.addEventListener('mousedown', e => {
+      dragging = true;
+      const r = panel.getBoundingClientRect();
+      ox = e.clientX - r.left;
+      oy = e.clientY - r.top;
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      panel.style.left   = (e.clientX - ox) + 'px';
+      panel.style.top    = (e.clientY - oy) + 'px';
+      panel.style.right  = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => { dragging = false; });
   }
 
   // ── Geocoding (Nominatim / OpenStreetMap — no API key required) ─────────────
@@ -134,20 +215,14 @@
     async function run() {
       const q = input.value.trim();
       if (!q) return;
-
-      if (!_state) {
-        status.textContent = 'Click "Show Seconds" first to activate';
-        return;
-      }
-
       status.textContent = 'Searching…';
       btn.disabled = true;
       try {
         const result = await geocode(q);
         if (result) {
           status.title = result.label;
-          const ok = navigateToMap(result.lat, result.lng);
-          status.textContent = ok ? '✓ Navigating to map…' : '✓ Found (navigation failed)';
+          status.textContent = '✓ Found';
+          showMiniMap(result.lat, result.lng, result.label);
         } else {
           status.textContent = 'No results';
         }
