@@ -39,7 +39,8 @@
   ].join(', ');
 
   // Note: the trips history map runs in a cross-origin iframe and cannot be panned
-  // programmatically from an add-in. Search results open in Google Maps instead.
+  // programmatically. Instead we navigate to MyGeotab's live map page (same origin)
+  // carrying device + date context, so the user sees their fleet centered at the result.
 
   // ── Internal state ──────────────────────────────────────────────────────────
   const WIDGET_ID  = 'gia-trips-enhancer-search';
@@ -51,9 +52,27 @@
 
   // ── Map utilities ───────────────────────────────────────────────────────────
 
-  function openInGoogleMaps(lat, lng, label) {
-    const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-    window.open(url, '_blank', 'noopener');
+  function navigateToMap(lat, lng) {
+    if (!_state) return false;
+    const st = _state.getState ? _state.getState() : {};
+
+    // Build the parameter object for MyGeotab's map page.
+    // 'location' is a known map page parameter; device/dates preserve fleet context.
+    const params = { location: { lat, lng } };
+
+    const deviceId = (st.device && (st.device.id || st.device)) || st.deviceId;
+    if (deviceId) params.deviceId = deviceId;
+
+    const dateRaw = (st.dates && st.dates[0]) || st.date || st.fromDate;
+    if (dateRaw) params.date = dateRaw;
+
+    try {
+      _state.gotoPage('map', params);
+      return true;
+    } catch (e) {
+      console.error('[TripsEnhancer] gotoPage error:', e);
+      return false;
+    }
   }
 
   // ── Geocoding (Nominatim / OpenStreetMap — no API key required) ─────────────
@@ -115,14 +134,20 @@
     async function run() {
       const q = input.value.trim();
       if (!q) return;
+
+      if (!_state) {
+        status.textContent = 'Click "Show Seconds" first to activate';
+        return;
+      }
+
       status.textContent = 'Searching…';
       btn.disabled = true;
       try {
         const result = await geocode(q);
         if (result) {
-          status.title       = result.label;
-          status.textContent = '✓ Opening in Google Maps…';
-          openInGoogleMaps(result.lat, result.lng, result.label);
+          status.title = result.label;
+          const ok = navigateToMap(result.lat, result.lng);
+          status.textContent = ok ? '✓ Navigating to map…' : '✓ Found (navigation failed)';
         } else {
           status.textContent = 'No results';
         }
