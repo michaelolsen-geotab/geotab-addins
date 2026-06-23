@@ -56,25 +56,47 @@
     const container = document.querySelector(SEL_MAP);
     if (!container) return null;
 
-    // Strategy A: some Leaflet builds attach the instance directly.
-    if (container._leaflet && typeof container._leaflet.setView === 'function') {
-      return container._leaflet;
+    // Predicate: does this value look like a Leaflet Map attached to our container?
+    // Uses classList check rather than reference equality so nested/proxied
+    // containers still match.
+    function isMap(v) {
+      return v
+        && typeof v === 'object'
+        && typeof v.setView === 'function'
+        && typeof v.panTo  === 'function'
+        && v._container
+        && v._container.classList
+        && v._container.classList.contains('leaflet-container');
     }
 
-    // Strategy B: scan window for an L.Map instance whose _container matches.
-    // L.Map instances expose setView, panTo, getZoom, and store _container.
-    const keys = Object.keys(window);
-    for (let i = 0; i < Math.min(keys.length, 400); i++) {
+    // Strategy A: some Leaflet builds attach the instance directly to the element.
+    if (isMap(container._leaflet)) return container._leaflet;
+
+    // Strategy B: direct window property (works when map is a module-level var).
+    const winKeys = Object.keys(window);
+    for (let i = 0; i < Math.min(winKeys.length, 500); i++) {
       try {
-        const v = window[keys[i]];
-        if (v && typeof v === 'object'
-            && typeof v.setView  === 'function'
-            && typeof v.panTo    === 'function'
-            && v._container === container) {
-          return v;
-        }
+        const v = window[winKeys[i]];
+        if (isMap(v)) return v;
       } catch (_) { /* skip non-enumerable / getters that throw */ }
     }
+
+    // Strategy C: one level deep into window objects.
+    // MyGeotab stores the map inside a namespaced object, not directly on window.
+    for (let i = 0; i < Math.min(winKeys.length, 300); i++) {
+      try {
+        const obj = window[winKeys[i]];
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+        const subKeys = Object.keys(obj);
+        for (let j = 0; j < Math.min(subKeys.length, 60); j++) {
+          try {
+            const v = obj[subKeys[j]];
+            if (isMap(v)) return v;
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
     return null;
   }
 
