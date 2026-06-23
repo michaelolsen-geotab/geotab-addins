@@ -31,7 +31,6 @@
   ].join(', ');
 
   // The stop/trip tooltip element that appears on map hover.
-  // Leaflet popups are the most likely container in v11.
   const SEL_TOOLTIP = [
     '.leaflet-popup-content',
     '.geotab-tooltip',
@@ -39,8 +38,8 @@
     '[class*="popup-content"]',
   ].join(', ');
 
-  // Leaflet map container — standard across all Leaflet versions.
-  const SEL_MAP = '.leaflet-container';
+  // Google Maps renders into a div — we find the map instance by API, not by DOM selector.
+  // SEL_MAP is only used as a fallback for Leaflet; Google Maps detection is API-based.
 
   // ── Internal state ──────────────────────────────────────────────────────────
   const WIDGET_ID  = 'gia-trips-enhancer-search';
@@ -52,58 +51,77 @@
 
   // ── Map utilities ───────────────────────────────────────────────────────────
 
-  function getLeafletMap() {
-    // MyGeotab loads the trips history map inside an iframe (via loadFrame).
-    // The iframe has allow-same-origin so we can access its contentWindow.
-    // Build a list of window contexts to search: parent first, then all iframes.
-    const contexts = [window];
+  // ── Map detection (Google Maps) ─────────────────────────────────────────────
+  // MyGeotab v11 uses Google Maps (confirmed via map.js / main.js in the stack).
+  // The map instance lives inside a sandboxed iframe and is not directly reachable
+  // from the parent window. Instead we use the Google Maps JS API itself, which
+  // is available inside every iframe context that loads map.js.
+  //
+  // google.maps.Map instances expose: getCenter(), setCenter(), setZoom(), getZoom().
+
+  function collectContexts() {
+    const ctxs = [window];
     document.querySelectorAll('iframe').forEach(f => {
-      try { if (f.contentWindow) contexts.push(f.contentWindow); } catch (_) {}
+      try { if (f.contentWindow) ctxs.push(f.contentWindow); } catch (_) {}
     });
+    return ctxs;
+  }
 
-    function isMap(v) {
-      return v
-        && typeof v === 'object'
-        && typeof v.setView === 'function'
-        && typeof v.panTo  === 'function'
-        && v._container
-        && v._container.classList
-        && v._container.classList.contains('leaflet-container');
-    }
+  function isGoogleMap(v) {
+    return v
+      && typeof v === 'object'
+      && typeof v.panTo      === 'function'
+      && typeof v.setCenter  === 'function'
+      && typeof v.getCenter  === 'function'
+      && typeof v.setZoom    === 'function';
+  }
 
-    for (const ctx of contexts) {
+  function findGoogleMap() {
+    for (const ctx of collectContexts()) {
       try {
-        // Strategy A: Leaflet instance attached directly to the container element.
-        const container = ctx.document.querySelector(SEL_MAP);
-        if (container && isMap(container._leaflet)) return container._leaflet;
-
-        // Strategy B: direct property on this window context.
-        const keys = Object.keys(ctx);
-        for (let i = 0; i < Math.min(keys.length, 500); i++) {
-          try { if (isMap(ctx[keys[i]])) return ctx[keys[i]]; } catch (_) {}
+        // Strategy A: google.maps registry (Maps JS API ≥ 3.45 stores instances here).
+        if (ctx.google && ctx.google.maps && ctx.google.maps.Map) {
+          // Walk document elements to find the map div, then retrieve the instance.
+          ctx.document.querySelectorAll('[class*="gm-style"]').forEach(el => {
+            // The Maps JS API attaches the Map instance to its container div.
+            if (el.__gm && isGoogleMap(el.__gm.ma)) return el.__gm.ma;
+          });
         }
 
-        // Strategy C: one level deep (map stored in a namespaced object).
+        // Strategy B: scan window properties (map stored as a module-level var).
+        const keys = Object.keys(ctx);
+        for (let i = 0; i < Math.min(keys.length, 500); i++) {
+          try {
+            const v = ctx[keys[i]];
+            if (isGoogleMap(v)) return v;
+          } catch (_) {}
+        }
+
+        // Strategy C: one level into namespaced objects.
         for (let i = 0; i < Math.min(keys.length, 300); i++) {
           try {
             const obj = ctx[keys[i]];
             if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
             const sub = Object.keys(obj);
             for (let j = 0; j < Math.min(sub.length, 60); j++) {
-              try { if (isMap(obj[sub[j]])) return obj[sub[j]]; } catch (_) {}
+              try {
+                const v = obj[sub[j]];
+                if (isGoogleMap(v)) return v;
+              } catch (_) {}
             }
           } catch (_) {}
         }
-      } catch (_) { /* cross-origin iframe or restricted context — skip */ }
+      } catch (_) { /* cross-origin or restricted — skip */ }
     }
-
     return null;
   }
 
   function panMapTo(lat, lng) {
-    const map = getLeafletMap();
+    const map = findGoogleMap();
     if (!map) return false;
-    map.setView([lat, lng], Math.max(map.getZoom() || 14, 14));
+    map.panTo({ lat, lng });
+    const zoom = map.getZoom();
+    if (zoom < 14) map.setZoom(14);
     return true;
   }
 
