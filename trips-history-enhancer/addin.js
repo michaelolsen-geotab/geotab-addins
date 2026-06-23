@@ -93,11 +93,10 @@
       format: 'json',
       limit:  '1',
     });
-    // Nominatim usage policy requires a descriptive User-Agent. Update to your org.
     const res = await fetch('https://nominatim.openstreetmap.org/search?' + params, {
       headers: {
         'Accept-Language': 'en',
-        'User-Agent': 'GeotabTripsHistoryEnhancer/1.0 (replace-with-your-email@example.com)',
+        'User-Agent': 'GeotabTripsHistoryEnhancer/1.0 (michaelolsen@geotab.com)',
       },
     });
     const data = await res.json();
