@@ -377,6 +377,11 @@
   }
 
   // ── MutationObserver ────────────────────────────────────────────────────────
+  // Button add-ins run inside MyGeotab's own iframe, so `document` is the add-in
+  // iframe's document — not the parent trips history page where the stop dialog
+  // is rendered. We must observe window.parent.document.body (same-origin) as well.
+
+  const TIME_RE = /\b\d{1,2}:\d{2}\b/;
 
   function startObserver() {
     if (_observer) return;
@@ -384,20 +389,25 @@
       for (const mut of mutations) {
         for (const node of mut.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
-
-          // Check the added node itself.
-          if (node.matches && node.matches(SEL_TOOLTIP)) {
+          // Cheap text-content check before spinning up the async upgrade.
+          if (TIME_RE.test(node.textContent)) {
             upgradeTooltipTimestamps(node).catch(() => {});
           }
-
-          // Also check descendants — Leaflet sometimes adds a wrapper + content together.
-          node.querySelectorAll(SEL_TOOLTIP).forEach(child => {
-            upgradeTooltipTimestamps(child).catch(() => {});
-          });
         }
       }
     });
+
+    // Observe our own iframe document.
     _observer.observe(document.body, { childList: true, subtree: true });
+
+    // Observe the parent page document — this is where MyGeotab renders the
+    // stop hover dialog. Fails silently if the parent is cross-origin.
+    try {
+      const parentBody = window.parent.document.body;
+      if (parentBody && parentBody !== document.body) {
+        _observer.observe(parentBody, { childList: true, subtree: true });
+      }
+    } catch (_) { /* cross-origin parent — skip */ }
   }
 
   function stopObserver() {
