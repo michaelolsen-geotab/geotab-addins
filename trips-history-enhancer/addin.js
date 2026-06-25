@@ -376,55 +376,82 @@
     }
   }
 
-  // ── MutationObserver ────────────────────────────────────────────────────────
-  // Button add-ins run inside MyGeotab's own iframe, so `document` is the add-in
-  // iframe's document — not the parent trips history page where the stop dialog
-  // is rendered. We must observe window.parent.document.body (same-origin) as well.
+  // ── Tooltip detection ────────────────────────────────────────────────────────
+  // Two tooltip types exist on the trips history page:
+  //   • Driving tooltip: freshly added to the DOM on hover → MutationObserver works.
+  //   • Stop tooltip:    pre-rendered, toggled visible on hover → MutationObserver
+  //                      fires too late (async trip fetch races the render).
+  //
+  // Solution: use a synchronous mouseover listener on the parent document.
+  // When the cursor enters any element containing a time pattern we walk up to
+  // find the tooltip root, pre-fetch trip data (cached after first call), then
+  // write seconds directly into the text nodes — all before the user reads it.
+  // MutationObserver handles the dynamically-added driving tooltip as a fallback.
 
   const TIME_RE = /\b\d{1,2}:\d{2}\b/;
 
+  // Walk up from el until we find an ancestor that looks like a tooltip root
+  // (has significant text content and is reasonably sized). Cap at 8 levels.
+  function findTooltipRoot(el) {
+    let node = el;
+    for (let i = 0; i < 8; i++) {
+      if (!node || node === document.body) break;
+      if (TIME_RE.test(node.textContent) && node.children.length > 0) return node;
+      node = node.parentElement;
+    }
+    return el;
+  }
+
+  // Debounce: skip if we already upgraded this element in the last 500 ms.
+  const _upgraded = new WeakSet();
+
+  function handleMouseover(e) {
+    const target = e.target;
+    if (!target || target.nodeType !== Node.ELEMENT_NODE) return;
+    if (!TIME_RE.test(target.textContent)) return;
+
+    const root = findTooltipRoot(target);
+    if (_upgraded.has(root)) return;
+    _upgraded.add(root);
+
+    upgradeTooltipTimestamps(root).catch(() => {});
+  }
+
   function startObserver() {
     if (_observer) return;
+
+    // Mouseover listener — catches the pre-rendered stop tooltip synchronously.
+    const targets = [document];
+    try {
+      const parentDoc = window.parent.document;
+      if (parentDoc !== document) targets.push(parentDoc);
+    } catch (_) {}
+
+    targets.forEach(doc => {
+      doc.addEventListener('mouseover', handleMouseover, { capture: true, passive: true });
+    });
+
+    // MutationObserver — catches the dynamically-added driving tooltip.
     _observer = new MutationObserver(mutations => {
       for (const mut of mutations) {
-        // Case 1: element freshly added to the DOM.
-        if (mut.type === 'childList') {
-          for (const node of mut.addedNodes) {
-            if (node.nodeType !== Node.ELEMENT_NODE) continue;
-            if (TIME_RE.test(node.textContent)) {
-              upgradeTooltipTimestamps(node).catch(() => {});
-            }
-          }
-        }
-        // Case 2: existing element made visible via a style/class toggle.
-        // MyGeotab pre-renders some tooltips and flips display/visibility on hover.
-        if (mut.type === 'attributes' && mut.target.nodeType === Node.ELEMENT_NODE) {
-          const el = mut.target;
-          if (TIME_RE.test(el.textContent)) {
-            upgradeTooltipTimestamps(el).catch(() => {});
+        if (mut.type !== 'childList') continue;
+        for (const node of mut.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (TIME_RE.test(node.textContent)) {
+            upgradeTooltipTimestamps(node).catch(() => {});
           }
         }
       }
     });
 
-    const OBS_OPTS = {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['style', 'class'],  // only fire for visibility-related changes
-    };
-
-    // Observe our own iframe document.
+    const OBS_OPTS = { childList: true, subtree: true };
     _observer.observe(document.body, OBS_OPTS);
-
-    // Observe the parent page document — this is where MyGeotab renders the
-    // stop hover dialog. Fails silently if the parent is cross-origin.
     try {
       const parentBody = window.parent.document.body;
       if (parentBody && parentBody !== document.body) {
         _observer.observe(parentBody, OBS_OPTS);
       }
-    } catch (_) { /* cross-origin parent — skip */ }
+    } catch (_) {}
   }
 
   function stopObserver() {
@@ -432,6 +459,14 @@
       _observer.disconnect();
       _observer = null;
     }
+    const targets = [document];
+    try {
+      const parentDoc = window.parent.document;
+      if (parentDoc !== document) targets.push(parentDoc);
+    } catch (_) {}
+    targets.forEach(doc => {
+      doc.removeEventListener('mouseover', handleMouseover, { capture: true });
+    });
   }
 
   // ── Add-in entry point ──────────────────────────────────────────────────────
