@@ -76,24 +76,30 @@
 
   geotab.customButtons['Trips+'] = function (event, api, state) {
     _api = api;
+    console.log('[TripsEnhancer] Button clicked, api received');
 
     // Clear stale cache.
     Object.keys(_rawTrips).forEach(k => delete _rawTrips[k]);
     Object.keys(_timeMaps).forEach(k => delete _timeMaps[k]);
 
-    try {
-      const st = state && state.getState ? state.getState() : {};
+    const btn = event && (event.target || event.srcElement);
+    function flashBtn(text, color) {
+      if (!btn) return;
+      btn.style.background = color;
+      btn.textContent      = text;
+      btn.disabled         = true;
+      setTimeout(() => { btn.style.background = ''; btn.textContent = 'Trips+'; btn.disabled = false; }, 2500);
+    }
 
-      // v11 field names (confirmed from state logging):
-      //   st.devices    → ["b338", ...]   (array of ID strings)
-      //   st.dateRange  → { startDate, endDate, label }
-      //   st.routes     → { "b338": [{ start, stop }, ...] }  ← full ISO timestamps!
+    try {
+      const st       = state && state.getState ? state.getState() : {};
       const deviceId = st.devices && st.devices[0] ? String(st.devices[0]) : null;
       if (deviceId) _deviceId = deviceId;
 
-      // Build the cache directly from routes already in state — no API call needed.
-      // Routes have start/stop with full second precision; map to Trip field names.
-      if (deviceId && st.routes && st.routes[deviceId]) {
+      console.log('[TripsEnhancer] deviceId:', deviceId, '| routes:', st.routes ? Object.keys(st.routes) : 'none');
+
+      // Fast path: build cache from routes already in state (full-precision timestamps).
+      if (deviceId && st.routes && st.routes[deviceId] && st.routes[deviceId].length) {
         const routes = st.routes[deviceId];
         routes.forEach((route, i) => {
           if (!route.start) return;
@@ -105,21 +111,31 @@
             NextTripStart: routes[i + 1] ? routes[i + 1].start : null,
           });
         });
-        console.log(`[TripsEnhancer] Cache built from state for ${deviceId}, ${routes.length} routes`);
+        console.log(`[TripsEnhancer] Cache built from state: ${routes.length} routes for ${deviceId}`);
+        flashBtn('✓ Ready', '#27ae60');
+        return;
       }
-    } catch (e) { console.error('[TripsEnhancer] Button error:', e); }
 
-    // Visual feedback — flash green so you know it worked.
-    const btn = event && (event.target || event.srcElement);
-    if (btn) {
-      btn.style.background = '#27ae60';
-      btn.textContent      = '✓ Ready';
-      btn.disabled         = true;
-      setTimeout(() => {
-        btn.style.background = '';
-        btn.textContent      = 'Trips+';
-        btn.disabled         = false;
-      }, 2000);
+      // Slow path: routes not in state — fall back to API call.
+      if (deviceId) {
+        const dateRaw = st.dateRange && st.dateRange.startDate;
+        const date    = dateRaw ? new Date(dateRaw) : new Date();
+        flashBtn('Fetching…', '#e67e22');
+        fetchTrips(deviceId, date).then(() => {
+          const n = (_rawTrips[`${deviceId}|${date.toDateString()}`] || []).length;
+          console.log(`[TripsEnhancer] API fallback fetched ${n} trips`);
+          if (btn) { btn.style.background = '#27ae60'; btn.textContent = '✓ Ready'; btn.disabled = true;
+            setTimeout(() => { btn.style.background = ''; btn.textContent = 'Trips+'; btn.disabled = false; }, 2500); }
+        });
+        return;
+      }
+
+      console.warn('[TripsEnhancer] No device found in state:', JSON.stringify(st).slice(0, 300));
+      flashBtn('No device?', '#e74c3c');
+
+    } catch (e) {
+      console.error('[TripsEnhancer] Button error:', e);
+      flashBtn('Error', '#e74c3c');
     }
   };
 
@@ -345,6 +361,7 @@
   // ── Boot ──────────────────────────────────────────────────────────────────────
 
   function init() {
+    console.log('[TripsEnhancer] Script loaded, attaching listeners');
     attachTo(document);
     try { const pd = window.parent.document; if (pd !== document) attachTo(pd); } catch (_) {}
     tryInjectSearch(30);
