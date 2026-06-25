@@ -64,23 +64,10 @@
   function getDeviceAndDate(state) {
     const results = { deviceId: null, date: null };
     try {
-      const st = state && state.getState ? state.getState() : {};
-      console.log('[TripsEnhancer] state keys:', Object.keys(st));
-      console.log('[TripsEnhancer] state:', JSON.stringify(st));
-
-      // Try every known field name variant for device.
-      results.deviceId =
-        (st.device && (st.device.id || st.device)) ||
-        (st.devices && st.devices[0] && (st.devices[0].id || st.devices[0])) ||
-        st.deviceId || st.DeviceId || st.vehicle || null;
-
-      // Try every known field name variant for date.
-      const dateRaw =
-        (st.dates    && st.dates[0])    ||
-        (st.dateRange && (st.dateRange.from || st.dateRange.startDate || st.dateRange.fromDate)) ||
-        st.date || st.fromDate || st.startDate || st.from || null;
-      results.date = dateRaw ? new Date(dateRaw) : null;
-
+      const st         = state && state.getState ? state.getState() : {};
+      results.deviceId = st.devices && st.devices[0] ? String(st.devices[0]) : null;
+      const dateRaw    = st.dateRange && st.dateRange.startDate;
+      results.date     = dateRaw ? new Date(dateRaw) : null;
     } catch (e) { console.error('[TripsEnhancer] getState error:', e); }
     return results;
   }
@@ -90,37 +77,49 @@
   geotab.customButtons['Trips+'] = function (event, api, state) {
     _api = api;
 
-    const { deviceId, date } = getDeviceAndDate(state);
-    if (deviceId) _deviceId = deviceId;
-
     // Clear stale cache.
     Object.keys(_rawTrips).forEach(k => delete _rawTrips[k]);
     Object.keys(_timeMaps).forEach(k => delete _timeMaps[k]);
 
-    // Visual feedback — button turns green while fetching.
+    try {
+      const st = state && state.getState ? state.getState() : {};
+
+      // v11 field names (confirmed from state logging):
+      //   st.devices    → ["b338", ...]   (array of ID strings)
+      //   st.dateRange  → { startDate, endDate, label }
+      //   st.routes     → { "b338": [{ start, stop }, ...] }  ← full ISO timestamps!
+      const deviceId = st.devices && st.devices[0] ? String(st.devices[0]) : null;
+      if (deviceId) _deviceId = deviceId;
+
+      // Build the cache directly from routes already in state — no API call needed.
+      // Routes have start/stop with full second precision; map to Trip field names.
+      if (deviceId && st.routes && st.routes[deviceId]) {
+        const routes = st.routes[deviceId];
+        routes.forEach((route, i) => {
+          if (!route.start) return;
+          const dateStr = new Date(route.start).toDateString();
+          if (!_rawTrips[`${deviceId}|${dateStr}`]) _rawTrips[`${deviceId}|${dateStr}`] = [];
+          _rawTrips[`${deviceId}|${dateStr}`].push({
+            Start:         route.start,
+            Stop:          route.stop,
+            NextTripStart: routes[i + 1] ? routes[i + 1].start : null,
+          });
+        });
+        console.log(`[TripsEnhancer] Cache built from state for ${deviceId}, ${routes.length} routes`);
+      }
+    } catch (e) { console.error('[TripsEnhancer] Button error:', e); }
+
+    // Visual feedback — flash green so you know it worked.
     const btn = event && (event.target || event.srcElement);
     if (btn) {
-      const origBg   = btn.style.background;
-      const origText = btn.textContent;
       btn.style.background = '#27ae60';
-      btn.textContent      = 'Fetching…';
+      btn.textContent      = '✓ Ready';
       btn.disabled         = true;
-
-      const done = () => {
-        btn.style.background = origBg;
-        btn.textContent      = origText;
+      setTimeout(() => {
+        btn.style.background = '';
+        btn.textContent      = 'Trips+';
         btn.disabled         = false;
-      };
-
-      if (_deviceId && date) {
-        fetchTrips(_deviceId, date).then(done);
-      } else {
-        console.warn('[TripsEnhancer] Could not determine device or date from state. deviceId:', _deviceId, 'date:', date);
-        btn.textContent = 'No device?';
-        setTimeout(done, 2000);
-      }
-    } else {
-      if (_deviceId && date) fetchTrips(_deviceId, date);
+      }, 2000);
     }
   };
 
