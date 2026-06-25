@@ -31,6 +31,7 @@
   ].join(', ');
 
   // The stop/trip tooltip element that appears on map hover.
+  // Leaflet popups are the most likely container in v11.
   const SEL_TOOLTIP = [
     '.leaflet-popup-content',
     '.geotab-tooltip',
@@ -38,9 +39,8 @@
     '[class*="popup-content"]',
   ].join(', ');
 
-  // Note: the trips history map runs in a cross-origin iframe and cannot be panned
-  // programmatically. Instead we show a draggable floating mini-map overlay using
-  // an OpenStreetMap embed, so the user stays on the trips history page.
+  // Leaflet map container — standard across all Leaflet versions.
+  const SEL_MAP = '.leaflet-container';
 
   // ── Internal state ──────────────────────────────────────────────────────────
   const WIDGET_ID  = 'gia-trips-enhancer-search';
@@ -52,108 +52,37 @@
 
   // ── Map utilities ───────────────────────────────────────────────────────────
 
-  // ── Floating mini-map overlay ────────────────────────────────────────────────
-  // Renders an OpenStreetMap iframe in a draggable panel over the trips history page.
-  // The user stays on the page and can see the searched location alongside trip data.
+  function getLeafletMap() {
+    const container = document.querySelector(SEL_MAP);
+    if (!container) return null;
 
-  const MINIMAP_ID = 'gia-trips-enhancer-minimap';
+    // Strategy A: some Leaflet builds attach the instance directly.
+    if (container._leaflet && typeof container._leaflet.setView === 'function') {
+      return container._leaflet;
+    }
 
-  function showMiniMap(lat, lng, label) {
-    // Remove any existing mini-map.
-    const existing = document.getElementById(MINIMAP_ID);
-    if (existing) existing.remove();
+    // Strategy B: scan window for an L.Map instance whose _container matches.
+    // L.Map instances expose setView, panTo, getZoom, and store _container.
+    const keys = Object.keys(window);
+    for (let i = 0; i < Math.min(keys.length, 400); i++) {
+      try {
+        const v = window[keys[i]];
+        if (v && typeof v === 'object'
+            && typeof v.setView  === 'function'
+            && typeof v.panTo    === 'function'
+            && v._container === container) {
+          return v;
+        }
+      } catch (_) { /* skip non-enumerable / getters that throw */ }
+    }
+    return null;
+  }
 
-    const panel = document.createElement('div');
-    panel.id = MINIMAP_ID;
-    panel.style.cssText = [
-      'position:fixed',
-      'top:80px',
-      'right:24px',
-      'width:380px',
-      'height:320px',
-      'background:#fff',
-      'border:1px solid #bbb',
-      'border-radius:6px',
-      'box-shadow:0 4px 16px rgba(0,0,0,.25)',
-      'display:flex',
-      'flex-direction:column',
-      'z-index:99999',
-      'font-family:sans-serif',
-    ].join(';');
-
-    // Title bar (doubles as drag handle).
-    const titleBar = document.createElement('div');
-    titleBar.style.cssText = [
-      'display:flex',
-      'align-items:center',
-      'justify-content:space-between',
-      'padding:6px 10px',
-      'background:#0078d4',
-      'color:#fff',
-      'border-radius:6px 6px 0 0',
-      'cursor:move',
-      'user-select:none',
-      'font-size:12px',
-      'gap:8px',
-    ].join(';');
-
-    const titleText = document.createElement('span');
-    titleText.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
-    titleText.title = label;
-    titleText.textContent = label.split(',').slice(0, 2).join(',');  // show first two parts
-
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '✕';
-    closeBtn.style.cssText = [
-      'background:none',
-      'border:none',
-      'color:#fff',
-      'cursor:pointer',
-      'font-size:14px',
-      'line-height:1',
-      'padding:0 2px',
-      'flex-shrink:0',
-    ].join(';');
-    closeBtn.addEventListener('click', () => panel.remove());
-
-    titleBar.appendChild(titleText);
-    titleBar.appendChild(closeBtn);
-
-    // OSM embed iframe — uses bbox centred on the result with a marker.
-    const zoom = 15;
-    const delta = 0.01;  // rough degree offset for bbox
-    const bbox = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
-    const src = `https://www.openstreetmap.org/export/embed.html`
-      + `?bbox=${bbox}&layer=mapnik&marker=${lat},${lng}`;
-
-    const mapFrame = document.createElement('iframe');
-    mapFrame.src = src;
-    mapFrame.style.cssText = 'flex:1;border:none;border-radius:0 0 6px 6px;';
-    mapFrame.setAttribute('loading', 'lazy');
-
-    panel.appendChild(titleBar);
-    panel.appendChild(mapFrame);
-    document.body.appendChild(panel);
-
-    // ── Drag behaviour ──────────────────────────────────────────────────────
-    let dragging = false, ox = 0, oy = 0;
-
-    titleBar.addEventListener('mousedown', e => {
-      dragging = true;
-      const r = panel.getBoundingClientRect();
-      ox = e.clientX - r.left;
-      oy = e.clientY - r.top;
-      e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', e => {
-      if (!dragging) return;
-      panel.style.left   = (e.clientX - ox) + 'px';
-      panel.style.top    = (e.clientY - oy) + 'px';
-      panel.style.right  = 'auto';
-    });
-
-    document.addEventListener('mouseup', () => { dragging = false; });
+  function panMapTo(lat, lng) {
+    const map = getLeafletMap();
+    if (!map) return false;
+    map.setView([lat, lng], Math.max(map.getZoom() || 14, 14));
+    return true;
   }
 
   // ── Geocoding (Nominatim / OpenStreetMap — no API key required) ─────────────
@@ -220,9 +149,11 @@
       try {
         const result = await geocode(q);
         if (result) {
-          status.title = result.label;
-          status.textContent = '✓ Found';
-          showMiniMap(result.lat, result.lng, result.label);
+          const panned = panMapTo(result.lat, result.lng);
+          status.title       = result.label;
+          status.textContent = panned
+            ? '✓ Found'
+            : '✓ Found (map not detected — pan manually)';
         } else {
           status.textContent = 'No results';
         }
@@ -288,41 +219,28 @@
     return null;
   }
 
-  // Format an ISO timestamp in a specific IANA timezone.
-  function toTZParts(isoStr, tz) {
-    try {
-      const fmt = new Intl.DateTimeFormat('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        hour12: false, timeZone: tz,
-      });
-      const parts = Object.fromEntries(fmt.formatToParts(new Date(isoStr)).map(p => [p.type, p.value]));
-      // hour12:false gives "24" for midnight — normalise to "00"
-      const h = parts.hour === '24' ? '00' : parts.hour;
-      return { key: `${h}:${parts.minute}`, hhmmss: `${h}:${parts.minute}:${parts.second}` };
-    } catch (_) {
-      // Fallback to browser local time if timezone string is invalid.
-      const d = new Date(isoStr);
-      const h = pad2(d.getHours()), m = pad2(d.getMinutes()), s = pad2(d.getSeconds());
-      return { key: `${h}:${m}`, hhmmss: `${h}:${m}:${s}` };
-    }
+  function toHHMMSS(isoStr) {
+    const d = new Date(isoStr);
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   }
 
   // Build "HH:MM" → "HH:MM:SS" lookup from a list of Trip records.
-  // Keys and values are formatted in the database timezone shown in the tooltip.
-  function buildTimeMap(trips, tz) {
+  // Trip.Start, Trip.Stop, and Trip.NextTripStart all carry stop-relevant times.
+  function buildTimeMap(trips) {
     const map = {};
     trips.forEach(trip => {
       ['Start', 'Stop', 'NextTripStart'].forEach(field => {
         if (!trip[field]) return;
-        const { key, hhmmss } = toTZParts(trip[field], tz);
-        if (!map[key]) map[key] = hhmmss;
+        const d   = new Date(trip[field]);
+        const key = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+        if (!map[key]) map[key] = toHHMMSS(trip[field]);
       });
     });
     return map;
   }
 
-  async function getTimeMap(deviceId, date, tz) {
-    const cacheKey = `${deviceId}|${date.toDateString()}|${tz}`;
+  async function getTimeMap(deviceId, date) {
+    const cacheKey = `${deviceId}|${date.toDateString()}`;
     if (_tripCache[cacheKey]) return _tripCache[cacheKey];
 
     const from = new Date(date); from.setHours(0, 0, 0, 0);
@@ -338,7 +256,7 @@
         },
       },
       trips => {
-        const m = buildTimeMap(trips || [], tz);
+        const m = buildTimeMap(trips || []);
         _tripCache[cacheKey] = m;
         resolve(m);
       },
@@ -349,48 +267,31 @@
     });
   }
 
-  // Extract IANA timezone from tooltip text, e.g. "at 10:03 (America/Denver)" → "America/Denver".
-  function extractTimezone(text) {
-    const m = text.match(/\(([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\)/);
-    return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone;
-  }
-
-  // Extract a date from tooltip text, e.g. "06/24/26" → Date object.
-  // Falls back to state date if not found.
-  function extractDate(text, fallback) {
-    const m = text.match(/\b(\d{2})\/(\d{2})\/(\d{2})\b/);
-    if (m) {
-      // MM/DD/YY — assume 2000s
-      const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`);
-      if (!isNaN(d.getTime())) return d;
-    }
-    return fallback;
-  }
-
   async function upgradeTooltipTimestamps(tooltipEl) {
     if (!_api || !_state) return;
 
-    const text = tooltipEl.textContent || '';
-    if (!TIME_RE.test(text)) return;
-
-    // Pull timezone and date directly from the tooltip — far more reliable than
-    // state, which may not reflect what's actually displayed in the dialog.
-    const tz = extractTimezone(text);
-
     const st = _state.getState ? _state.getState() : {};
-    const stateDateRaw = (st.dates && st.dates[0]) || st.date || st.fromDate || null;
-    const stateDate = stateDateRaw ? new Date(stateDateRaw) : new Date();
-    const contextDate = extractDate(text, stateDate);
 
+    // Uncomment to debug the state shape in your version:
+    // console.debug('[TripsEnhancer] state:', JSON.stringify(st));
+
+    // Pull device id — shape may vary; widen this if timestamps aren't upgrading.
     const deviceId = (st.device && (st.device.id || st.device))
                   || st.deviceId
                   || null;
-    if (!deviceId) return;
 
-    const timeMap = await getTimeMap(deviceId, contextDate, tz);
+    // Pull the viewed date — prefer the start of the selected range.
+    const dateRaw  = (st.dates && st.dates[0]) || st.date || st.fromDate || null;
+
+    if (!deviceId || !dateRaw) return;
+
+    const contextDate = new Date(dateRaw);
+    if (isNaN(contextDate.getTime())) return;
+
+    const timeMap = await getTimeMap(deviceId, contextDate);
     if (!Object.keys(timeMap).length) return;
 
-    // Walk every text node and replace HH:mm with HH:mm:ss.
+    // Walk every text node in the tooltip and replace matching HH:mm patterns.
     const walker = document.createTreeWalker(tooltipEl, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
@@ -398,6 +299,7 @@
       if (!parsed) continue;
       const key = `${pad2(parsed.h)}:${pad2(parsed.min)}`;
       if (!timeMap[key]) continue;
+      // Replace the first HH:mm (±AM/PM) occurrence in this text node.
       node.nodeValue = node.nodeValue.replace(
         /\b\d{1,2}:\d{2}(?:\s*(?:am|pm))?\b/i,
         timeMap[key]
@@ -405,101 +307,35 @@
     }
   }
 
-  // ── Tooltip detection ────────────────────────────────────────────────────────
-  // Two tooltip types exist on the trips history page:
-  //   • Driving tooltip: freshly added to the DOM on hover → MutationObserver works.
-  //   • Stop tooltip:    pre-rendered, toggled visible on hover → MutationObserver
-  //                      fires too late (async trip fetch races the render).
-  //
-  // Solution: use a synchronous mouseover listener on the parent document.
-  // When the cursor enters any element containing a time pattern we walk up to
-  // find the tooltip root, pre-fetch trip data (cached after first call), then
-  // write seconds directly into the text nodes — all before the user reads it.
-  // MutationObserver handles the dynamically-added driving tooltip as a fallback.
-
-  const TIME_RE = /\b\d{1,2}:\d{2}\b/;
-
-  // Walk up from target to find a reasonable tooltip container (has ≥2 children).
-  // Stops before body. Returns the best candidate or target itself.
-  function findTooltipRoot(target) {
-    let el = target;
-    for (let i = 0; i < 8; i++) {
-      const p = el.parentElement;
-      if (!p || p.tagName === 'BODY' || p.tagName === 'HTML') break;
-      el = p;
-      if (el.children.length >= 2 && TIME_RE.test(el.textContent)) break;
-    }
-    return el;
-  }
-
-  function handleMouseover(e) {
-    const target = e.target;
-    if (!target || target.nodeType !== Node.ELEMENT_NODE) return;
-    if (!TIME_RE.test(target.textContent)) return;
-    upgradeTooltipTimestamps(findTooltipRoot(target)).catch(() => {});
-  }
-
-  // ── Button visual state ───────────────────────────────────────────────────────
-  // The button lives in the parent document's toolbar. We find it by text content
-  // and toggle a highlighted style so the user can see whether seconds are active.
-
-  function setButtonState(active) {
-    const docs = [document];
-    try { if (window.parent.document !== document) docs.push(window.parent.document); } catch (_) {}
-    for (const doc of docs) {
-      doc.querySelectorAll('button, [role="button"], a').forEach(el => {
-        if (el.textContent.trim() === 'Show Seconds') {
-          el.style.background    = active ? '#005a9e' : '';
-          el.style.color         = active ? '#ffffff' : '';
-          el.style.fontWeight    = active ? 'bold'    : '';
-          el.style.outline       = active ? '2px solid #003f6e' : '';
-          el.title               = active ? 'Seconds visible — click to disable' : 'Click to show seconds on stop tooltips';
-        }
-      });
-    }
-  }
+  // ── MutationObserver ────────────────────────────────────────────────────────
 
   function startObserver() {
     if (_observer) return;
-
-    // mouseover listener — fires synchronously when cursor enters either tooltip type.
-    const docs = [document];
-    try { if (window.parent.document !== document) docs.push(window.parent.document); } catch (_) {}
-    docs.forEach(doc => {
-      doc.addEventListener('mouseover', handleMouseover, { capture: true, passive: true });
-    });
-
-    // MutationObserver — belt-and-suspenders for dynamically added tooltips.
     _observer = new MutationObserver(mutations => {
       for (const mut of mutations) {
-        if (mut.type !== 'childList') continue;
         for (const node of mut.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
-          if (TIME_RE.test(node.textContent)) {
+
+          // Check the added node itself.
+          if (node.matches && node.matches(SEL_TOOLTIP)) {
             upgradeTooltipTimestamps(node).catch(() => {});
           }
+
+          // Also check descendants — Leaflet sometimes adds a wrapper + content together.
+          node.querySelectorAll(SEL_TOOLTIP).forEach(child => {
+            upgradeTooltipTimestamps(child).catch(() => {});
+          });
         }
       }
     });
-
-    const OBS_OPTS = { childList: true, subtree: true };
-    _observer.observe(document.body, OBS_OPTS);
-    try {
-      const parentBody = window.parent.document.body;
-      if (parentBody && parentBody !== document.body) {
-        _observer.observe(parentBody, OBS_OPTS);
-      }
-    } catch (_) {}
+    _observer.observe(document.body, { childList: true, subtree: true });
   }
 
   function stopObserver() {
-    if (_observer) { _observer.disconnect(); _observer = null; }
-    if (_upgradeThrottle) { clearTimeout(_upgradeThrottle); _upgradeThrottle = null; }
-    const docs = [document];
-    try { if (window.parent.document !== document) docs.push(window.parent.document); } catch (_) {}
-    docs.forEach(doc => {
-      doc.removeEventListener('mouseover', handleMouseover, { capture: true });
-    });
+    if (_observer) {
+      _observer.disconnect();
+      _observer = null;
+    }
   }
 
   // ── Add-in entry point ──────────────────────────────────────────────────────
@@ -513,14 +349,13 @@
     _secondsOn = !_secondsOn;
 
     if (_secondsOn) {
+      // Clear stale cache when the user activates (they may have changed device/date).
       Object.keys(_tripCache).forEach(k => delete _tripCache[k]);
-      injectSearchWidget();
+      injectSearchWidget();   // no-op if already present
       startObserver();
     } else {
       stopObserver();
     }
-
-    setButtonState(_secondsOn);
   };
 
   // ── Boot ────────────────────────────────────────────────────────────────────
