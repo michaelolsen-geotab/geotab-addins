@@ -64,11 +64,23 @@
   function getDeviceAndDate(state) {
     const results = { deviceId: null, date: null };
     try {
-      const st      = state && state.getState ? state.getState() : {};
-      results.deviceId = (st.device && (st.device.id || st.device)) || st.deviceId || null;
-      const dateRaw    = (st.dates && st.dates[0]) || st.date || st.fromDate || null;
-      results.date     = dateRaw ? new Date(dateRaw) : null;
-      console.log('[TripsEnhancer] state:', JSON.stringify(st).slice(0, 200));
+      const st = state && state.getState ? state.getState() : {};
+      console.log('[TripsEnhancer] state keys:', Object.keys(st));
+      console.log('[TripsEnhancer] state:', JSON.stringify(st));
+
+      // Try every known field name variant for device.
+      results.deviceId =
+        (st.device && (st.device.id || st.device)) ||
+        (st.devices && st.devices[0] && (st.devices[0].id || st.devices[0])) ||
+        st.deviceId || st.DeviceId || st.vehicle || null;
+
+      // Try every known field name variant for date.
+      const dateRaw =
+        (st.dates    && st.dates[0])    ||
+        (st.dateRange && (st.dateRange.from || st.dateRange.startDate || st.dateRange.fromDate)) ||
+        st.date || st.fromDate || st.startDate || st.from || null;
+      results.date = dateRaw ? new Date(dateRaw) : null;
+
     } catch (e) { console.error('[TripsEnhancer] getState error:', e); }
     return results;
   }
