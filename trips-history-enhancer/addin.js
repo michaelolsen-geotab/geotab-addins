@@ -390,48 +390,58 @@
 
   const TIME_RE = /\b\d{1,2}:\d{2}\b/;
 
-  // Walk up from el until we find an ancestor that looks like a tooltip root
-  // (has significant text content and is reasonably sized). Cap at 8 levels.
-  function findTooltipRoot(el) {
-    let node = el;
-    for (let i = 0; i < 8; i++) {
-      if (!node || node === document.body) break;
-      if (TIME_RE.test(node.textContent) && node.children.length > 0) return node;
-      node = node.parentElement;
-    }
-    return el;
-  }
-
-  // Debounce: skip if we already upgraded this element in the last 500 ms.
-  const _upgraded = new WeakSet();
+  // Throttle: only run one upgrade at a time; queue at most one pending call.
+  let _upgradeThrottle = null;
 
   function handleMouseover(e) {
     const target = e.target;
     if (!target || target.nodeType !== Node.ELEMENT_NODE) return;
     if (!TIME_RE.test(target.textContent)) return;
+    if (_upgradeThrottle) return;
 
-    const root = findTooltipRoot(target);
-    if (_upgraded.has(root)) return;
-    _upgraded.add(root);
+    // Walk up to find a node that has children and contains a time — tooltip root.
+    let root = target;
+    for (let i = 0; i < 8 && root.parentElement && root.parentElement !== document.body; i++) {
+      if (root.children.length > 0 && TIME_RE.test(root.textContent)) break;
+      root = root.parentElement;
+    }
 
-    upgradeTooltipTimestamps(root).catch(() => {});
+    const el = root;
+    _upgradeThrottle = setTimeout(() => { _upgradeThrottle = null; }, 150);
+    upgradeTooltipTimestamps(el).catch(() => {});
+  }
+
+  // ── Button visual state ───────────────────────────────────────────────────────
+  // The button lives in the parent document's toolbar. We find it by text content
+  // and toggle a highlighted style so the user can see whether seconds are active.
+
+  function setButtonState(active) {
+    const docs = [document];
+    try { if (window.parent.document !== document) docs.push(window.parent.document); } catch (_) {}
+    for (const doc of docs) {
+      doc.querySelectorAll('button, [role="button"], a').forEach(el => {
+        if (el.textContent.trim() === 'Show Seconds') {
+          el.style.background    = active ? '#005a9e' : '';
+          el.style.color         = active ? '#ffffff' : '';
+          el.style.fontWeight    = active ? 'bold'    : '';
+          el.style.outline       = active ? '2px solid #003f6e' : '';
+          el.title               = active ? 'Seconds visible — click to disable' : 'Click to show seconds on stop tooltips';
+        }
+      });
+    }
   }
 
   function startObserver() {
     if (_observer) return;
 
-    // Mouseover listener — catches the pre-rendered stop tooltip synchronously.
-    const targets = [document];
-    try {
-      const parentDoc = window.parent.document;
-      if (parentDoc !== document) targets.push(parentDoc);
-    } catch (_) {}
-
-    targets.forEach(doc => {
+    // mouseover listener — fires synchronously when cursor enters either tooltip type.
+    const docs = [document];
+    try { if (window.parent.document !== document) docs.push(window.parent.document); } catch (_) {}
+    docs.forEach(doc => {
       doc.addEventListener('mouseover', handleMouseover, { capture: true, passive: true });
     });
 
-    // MutationObserver — catches the dynamically-added driving tooltip.
+    // MutationObserver — belt-and-suspenders for dynamically added tooltips.
     _observer = new MutationObserver(mutations => {
       for (const mut of mutations) {
         if (mut.type !== 'childList') continue;
@@ -455,16 +465,11 @@
   }
 
   function stopObserver() {
-    if (_observer) {
-      _observer.disconnect();
-      _observer = null;
-    }
-    const targets = [document];
-    try {
-      const parentDoc = window.parent.document;
-      if (parentDoc !== document) targets.push(parentDoc);
-    } catch (_) {}
-    targets.forEach(doc => {
+    if (_observer) { _observer.disconnect(); _observer = null; }
+    if (_upgradeThrottle) { clearTimeout(_upgradeThrottle); _upgradeThrottle = null; }
+    const docs = [document];
+    try { if (window.parent.document !== document) docs.push(window.parent.document); } catch (_) {}
+    docs.forEach(doc => {
       doc.removeEventListener('mouseover', handleMouseover, { capture: true });
     });
   }
@@ -480,13 +485,14 @@
     _secondsOn = !_secondsOn;
 
     if (_secondsOn) {
-      // Clear stale cache when the user activates (they may have changed device/date).
       Object.keys(_tripCache).forEach(k => delete _tripCache[k]);
-      injectSearchWidget();   // no-op if already present
+      injectSearchWidget();
       startObserver();
     } else {
       stopObserver();
     }
+
+    setButtonState(_secondsOn);
   };
 
   // ── Boot ────────────────────────────────────────────────────────────────────
