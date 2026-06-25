@@ -1,189 +1,106 @@
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Trips History Enhancer</title>
+<head>
+<meta charset="utf-8">
 <style>
-  body { margin: 0; font-family: sans-serif; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { overflow: hidden; font-family: sans-serif; }
   #search-wrap {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 8px;
+    display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+    border-bottom: 1px solid #e0e0e0; background: #fafafa;
   }
   #search-input {
     padding: 3px 8px; border: 1px solid #bbb; border-radius: 3px;
-    font-size: 13px; width: 215px; height: 28px; box-sizing: border-box;
+    font-size: 13px; width: 215px; height: 28px;
   }
   #search-btn {
     padding: 0 11px; height: 28px; background: #0078d4; color: #fff;
     border: none; border-radius: 3px; cursor: pointer; font-size: 13px;
   }
   #search-status {
-    font-size: 12px; color: #555; max-width: 175px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: #555; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
   }
 </style>
 </head>
 <body>
 <div id="search-wrap">
-  <input id="search-input" type="text" placeholder="Search address…" />
+  <input id="search-input" type="text" placeholder="Search address on map…" />
   <button id="search-btn">Go</button>
   <span id="search-status" title=""></span>
 </div>
-
 <script>
 (function () {
   'use strict';
 
-  // ── Globals provided by MyGeotab page add-in lifecycle ──────────────────────
+  // ── State ────────────────────────────────────────────────────────────────────
   let _api   = null;
   let _state = null;
 
-  // ── Trip cache: "deviceId|YYYY-MM-DD|tz" → { "HH:MM": "HH:MM:SS" } ─────────
-  const _tripCache = {};
+  // Raw trips:  "deviceId|dateStr"    → Trip[]
+  // Time maps:  "deviceId|dateStr|tz" → { "HH:MM": "HH:MM:SS" }
+  const _rawTrips = {};
+  const _timeMaps = {};
 
-  // ── Minimap ─────────────────────────────────────────────────────────────────
+  // ── Trip fetching ────────────────────────────────────────────────────────────
 
-  const MINIMAP_ID = 'gia-trips-enhancer-minimap';
+  function fetchTrips(deviceId, date) {
+    const dateStr = date.toDateString();
+    if (_rawTrips[`${deviceId}|${dateStr}`]) return Promise.resolve();
 
-  function showMiniMap(lat, lng, label) {
-    try {
-      const pdoc = window.parent.document;
-      let panel = pdoc.getElementById(MINIMAP_ID);
-      if (panel) panel.remove();
+    const from = new Date(date); from.setHours(0, 0, 0, 0);
+    const to   = new Date(date); to.setHours(23, 59, 59, 999);
 
-      panel = pdoc.createElement('div');
-      panel.id = MINIMAP_ID;
-      panel.style.cssText = [
-        'position:fixed','top:80px','right:24px','width:380px','height:320px',
-        'background:#fff','border:1px solid #bbb','border-radius:6px',
-        'box-shadow:0 4px 16px rgba(0,0,0,.25)','display:flex',
-        'flex-direction:column','z-index:99999','font-family:sans-serif',
-      ].join(';');
-
-      const bar = pdoc.createElement('div');
-      bar.style.cssText = [
-        'display:flex','align-items:center','justify-content:space-between',
-        'padding:6px 10px','background:#0078d4','color:#fff',
-        'border-radius:6px 6px 0 0','cursor:move','user-select:none',
-        'font-size:12px','gap:8px',
-      ].join(';');
-
-      const title = pdoc.createElement('span');
-      title.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
-      title.title = label;
-      title.textContent = label.split(',').slice(0, 2).join(',');
-
-      const closeBtn = pdoc.createElement('button');
-      closeBtn.textContent = '✕';
-      closeBtn.style.cssText = 'background:none;border:none;color:#fff;cursor:pointer;font-size:14px;padding:0 2px;';
-      closeBtn.addEventListener('click', () => panel.remove());
-
-      bar.appendChild(title);
-      bar.appendChild(closeBtn);
-
-      const delta = 0.01;
-      const bbox = `${lng-delta},${lat-delta},${lng+delta},${lat+delta}`;
-      const frame = pdoc.createElement('iframe');
-      frame.src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat},${lng}`;
-      frame.style.cssText = 'flex:1;border:none;border-radius:0 0 6px 6px;';
-
-      panel.appendChild(bar);
-      panel.appendChild(frame);
-      pdoc.body.appendChild(panel);
-
-      // Drag
-      let dragging = false, ox = 0, oy = 0;
-      bar.addEventListener('mousedown', e => {
-        dragging = true;
-        const r = panel.getBoundingClientRect();
-        ox = e.clientX - r.left; oy = e.clientY - r.top;
-        e.preventDefault();
-      });
-      pdoc.addEventListener('mousemove', e => {
-        if (!dragging) return;
-        panel.style.left = (e.clientX - ox) + 'px';
-        panel.style.top  = (e.clientY - oy) + 'px';
-        panel.style.right = 'auto';
-      });
-      pdoc.addEventListener('mouseup', () => { dragging = false; });
-    } catch (e) {
-      console.error('[TripsEnhancer] showMiniMap error:', e);
-    }
-  }
-
-  // ── Geocoding ────────────────────────────────────────────────────────────────
-
-  async function geocode(query) {
-    const params = new URLSearchParams({ q: query, format: 'json', limit: '1' });
-    const res = await fetch('https://nominatim.openstreetmap.org/search?' + params, {
-      headers: {
-        'Accept-Language': 'en',
-        'User-Agent': 'GeotabTripsHistoryEnhancer/2.0 (michaelolsen@geotab.com)',
-      },
+    return new Promise(resolve => {
+      _api.call('Get', {
+        typeName: 'Trip',
+        search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
+      }, trips => {
+        if (trips && trips.length) {
+          _rawTrips[`${deviceId}|${dateStr}`] = trips;
+          console.log(`[TripsEnhancer] Cached ${trips.length} trips for ${deviceId} on ${dateStr}`);
+        }
+        resolve();
+      }, err => { console.error('[TripsEnhancer] Trip fetch error:', err); resolve(); });
     });
-    const data = await res.json();
-    if (!data.length) return null;
-    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name };
   }
 
-  // ── Search widget ─────────────────────────────────────────────────────────────
-
-  const searchInput  = document.getElementById('search-input');
-  const searchBtn    = document.getElementById('search-btn');
-  const searchStatus = document.getElementById('search-status');
-
-  async function runSearch() {
-    const q = searchInput.value.trim();
-    if (!q) return;
-    searchStatus.textContent = 'Searching…';
-    searchBtn.disabled = true;
+  function prefetch() {
     try {
-      const result = await geocode(q);
-      if (result) {
-        searchStatus.title = result.label;
-        searchStatus.textContent = '✓ Found';
-        showMiniMap(result.lat, result.lng, result.label);
-      } else {
-        searchStatus.textContent = 'No results';
+      const st       = _state.getState ? _state.getState() : {};
+      const deviceId = (st.device && (st.device.id || st.device)) || st.deviceId;
+      const dateRaw  = (st.dates && st.dates[0]) || st.date || st.fromDate;
+      if (deviceId && dateRaw) {
+        fetchTrips(deviceId, new Date(dateRaw)).catch(() => {});
       }
-    } catch (err) {
-      searchStatus.textContent = 'Error';
-      console.error('[TripsEnhancer] geocode error:', err);
-    } finally {
-      searchBtn.disabled = false;
-    }
+    } catch (_) {}
   }
 
-  searchBtn.addEventListener('click', runSearch);
-  searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+  // ── Device helper ────────────────────────────────────────────────────────────
 
-  // ── Timestamp upgrade ─────────────────────────────────────────────────────────
+  function getDeviceId() {
+    try {
+      const st = _state.getState ? _state.getState() : {};
+      const id = (st.device && (st.device.id || st.device)) || st.deviceId;
+      if (id) return id;
+    } catch (_) {}
+    try {
+      const hash = window.parent.location.hash || '';
+      const m    = hash.match(/[Dd]evice[:(]+id:([^),\s]+)/);
+      if (m) return m[1];
+    } catch (_) {}
+    const first = Object.keys(_rawTrips)[0];
+    return first ? first.split('|')[0] : null;
+  }
+
+  // ── Time formatting ──────────────────────────────────────────────────────────
 
   function pad2(n) { return String(n).padStart(2, '0'); }
-
-  const TIME_RE        = /\b\d{1,2}:\d{2}\b/;
-  const TIME_RE_NOSEC  = /\b(\d{1,2}):(\d{2})\b(?!:\d{2})/;
-  const TIME_RE_12H    = /\b(\d{1,2}):(\d{2})\s*(am|pm)\b/i;
-  const TZ_RE          = /\(([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\)/;
-  const DATE_RE        = /\b(\d{2})\/(\d{2})\/(\d{2})\b/;
-
-  function extractTZ(text) {
-    const m = text.match(TZ_RE);
-    return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone;
-  }
-
-  function extractDate(text) {
-    const m = text.match(DATE_RE);
-    if (m) {
-      const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`);
-      if (!isNaN(d)) return d;
-    }
-    return new Date();
-  }
 
   function toTZParts(isoStr, tz) {
     try {
       const fmt = new Intl.DateTimeFormat('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        hour12: false, timeZone: tz,
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: tz,
       });
       const p = Object.fromEntries(fmt.formatToParts(new Date(isoStr)).map(x => [x.type, x.value]));
       const h = p.hour === '24' ? '00' : p.hour;
@@ -195,7 +112,11 @@
     }
   }
 
-  function buildTimeMap(trips, tz) {
+  function getTimeMap(deviceId, dateStr, tz) {
+    const mk = `${deviceId}|${dateStr}|${tz}`;
+    if (_timeMaps[mk]) return _timeMaps[mk];
+    const trips = _rawTrips[`${deviceId}|${dateStr}`];
+    if (!trips) return null;
     const map = {};
     trips.forEach(trip => {
       ['Start', 'Stop', 'NextTripStart'].forEach(field => {
@@ -204,97 +125,63 @@
         if (!map[key]) map[key] = hhmmss;
       });
     });
-    return map;
+    return (_timeMaps[mk] = map);
   }
 
-  function fetchTrips(deviceId, date, tz) {
-    const cacheKey = `${deviceId}|${date.toDateString()}|${tz}`;
-    if (_tripCache[cacheKey]) return Promise.resolve(_tripCache[cacheKey]);
+  // ── Tooltip upgrade ──────────────────────────────────────────────────────────
 
-    const from = new Date(date); from.setHours(0, 0, 0, 0);
-    const to   = new Date(date); to.setHours(23, 59, 59, 999);
+  const TIME_RE       = /\b\d{1,2}:\d{2}\b/;
+  const TIME_RE_NOSEC = /\b(\d{1,2}):(\d{2})\b(?!:\d{2})/g;
+  const TIME_RE_12H   = /\b(\d{1,2}):(\d{2})\s*(am|pm)\b/gi;
+  const TZ_RE         = /\(([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\)/;
+  const DATE_RE       = /\b(\d{2})\/(\d{2})\/(\d{2})\b/;
 
-    return new Promise(resolve => {
-      _api.call('Get', {
-        typeName: 'Trip',
-        search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
-      }, trips => {
-        const m = buildTimeMap(trips || [], tz);
-        _tripCache[cacheKey] = m;
-        resolve(m);
-      }, err => {
-        console.error('[TripsEnhancer] Trip fetch error:', err);
-        resolve({});
+  function extractTZ(text)   { const m = text.match(TZ_RE);   return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone; }
+  function extractDate(text) { const m = text.match(DATE_RE); if (m) { const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`); if (!isNaN(d)) return d; } return new Date(); }
+
+  function applyTimeMap(el, timeMap) {
+    const tw = (el.ownerDocument || document).createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = tw.nextNode())) {
+      let val = node.nodeValue;
+      val = val.replace(TIME_RE_12H, (match, hStr, mStr, ampm) => {
+        let h = parseInt(hStr, 10);
+        if (ampm.toLowerCase() === 'pm' && h < 12) h += 12;
+        if (ampm.toLowerCase() === 'am' && h === 12) h = 0;
+        return timeMap[`${pad2(h)}:${mStr}`] || match;
       });
-    });
+      val = val.replace(TIME_RE_NOSEC, (match, hStr, mStr) => timeMap[`${pad2(parseInt(hStr, 10))}:${mStr}`] || match);
+      if (val !== node.nodeValue) node.nodeValue = val;
+      TIME_RE_12H.lastIndex = 0;
+      TIME_RE_NOSEC.lastIndex = 0;
+    }
   }
 
-  // Pre-fetch today's trips as soon as we have api+state so first hover is instant.
-  function prefetch() {
-    if (!_api || !_state) return;
-    try {
-      const st = _state.getState ? _state.getState() : {};
-      const deviceId = (st.device && (st.device.id || st.device)) || st.deviceId;
-      const dateRaw  = (st.dates && st.dates[0]) || st.date || st.fromDate;
-      if (!deviceId || !dateRaw) return;
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; // best guess until a tooltip appears
-      fetchTrips(deviceId, new Date(dateRaw), tz).catch(() => {});
-    } catch (_) {}
-  }
-
-  function upgradeEl(el) {
-    if (!_api) return;
+  async function upgradeEl(el) {
     const text = el.textContent || '';
     if (!TIME_RE.test(text)) return;
 
-    const tz          = extractTZ(text);
-    const date        = extractDate(text);
-    const st          = _state && _state.getState ? _state.getState() : {};
-    const deviceId    = (st.device && (st.device.id || st.device)) || st.deviceId;
+    const tz       = extractTZ(text);
+    const date     = extractDate(text);
+    const dateStr  = date.toDateString();
+    const deviceId = getDeviceId();
     if (!deviceId) return;
 
-    fetchTrips(deviceId, date, tz).then(timeMap => {
-      if (!Object.keys(timeMap).length) return;
-      // Walk all text nodes in the element and replace HH:mm with HH:mm:ss.
-      const walker = document.createTreeWalker
-        ? null  // we'll use parent's walker
-        : null;
+    // Synchronous fast path — no flash if cache is warm.
+    const cached = getTimeMap(deviceId, dateStr, tz);
+    if (cached) { applyTimeMap(el, cached); return; }
 
-      // We may be operating on a node from the parent document — use its createTreeWalker.
-      const ownerDoc = el.ownerDocument || document;
-      const tw = ownerDoc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      let node;
-      while ((node = tw.nextNode())) {
-        const val = node.nodeValue;
-        // 12h match
-        let m12 = val.match(TIME_RE_12H);
-        if (m12) {
-          let h = parseInt(m12[1], 10);
-          if (m12[3].toLowerCase() === 'pm' && h < 12) h += 12;
-          if (m12[3].toLowerCase() === 'am' && h === 12) h = 0;
-          const key = `${pad2(h)}:${m12[2]}`;
-          if (timeMap[key]) { node.nodeValue = val.replace(TIME_RE_12H, timeMap[key]); continue; }
-        }
-        // 24h match — skip if already has seconds
-        let m24 = val.match(TIME_RE_NOSEC);
-        if (m24) {
-          const key = `${pad2(parseInt(m24[1],10))}:${m24[2]}`;
-          if (timeMap[key]) { node.nodeValue = val.replace(TIME_RE_NOSEC, timeMap[key]); }
-        }
-      }
-    }).catch(() => {});
+    // Async slow path — first hover on an uncached day.
+    await fetchTrips(deviceId, date);
+    const timeMap = getTimeMap(deviceId, dateStr, tz);
+    if (timeMap) applyTimeMap(el, timeMap);
   }
 
-  // ── Observation ───────────────────────────────────────────────────────────────
-  // Attach to both our iframe document and the parent document.
-  // mouseover: catches pre-rendered stop dialogs toggled visible.
-  // MutationObserver: catches freshly added driving/zone dialogs.
+  // ── Observers ────────────────────────────────────────────────────────────────
 
   function handleMouseover(e) {
     const t = e.target;
-    if (!t || t.nodeType !== Node.ELEMENT_NODE) return;
-    if (!TIME_RE.test(t.textContent)) return;
-    // Walk up to a node with multiple children — tooltip container root.
+    if (!t || t.nodeType !== Node.ELEMENT_NODE || !TIME_RE.test(t.textContent)) return;
     let el = t;
     for (let i = 0; i < 8; i++) {
       const p = el.parentElement;
@@ -302,39 +189,109 @@
       el = p;
       if (el.children.length >= 2 && TIME_RE.test(el.textContent)) break;
     }
-    upgradeEl(el);
+    upgradeEl(el).catch(() => {});
   }
 
-  function attachListeners(doc) {
-    doc.addEventListener('mouseover', handleMouseover, { capture: true, passive: true });
-    const obs = new MutationObserver(muts => {
-      for (const mut of muts) {
-        for (const node of mut.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE && TIME_RE.test(node.textContent)) {
-            upgradeEl(node);
-          }
-        }
-      }
+  function attachTo(doc) {
+    try {
+      doc.addEventListener('mouseover', handleMouseover, { capture: true, passive: true });
+      new MutationObserver(muts => {
+        for (const mut of muts)
+          for (const node of mut.addedNodes)
+            if (node.nodeType === Node.ELEMENT_NODE && TIME_RE.test(node.textContent))
+              upgradeEl(node).catch(() => {});
+      }).observe(doc.body, { childList: true, subtree: true });
+    } catch (_) {}
+  }
+
+  // ── Minimap ──────────────────────────────────────────────────────────────────
+
+  const MINIMAP_ID = 'gia-trips-enhancer-minimap';
+
+  function showMiniMap(lat, lng, label) {
+    // Render into parent document so it floats over the full page.
+    const pdoc = window.parent.document;
+    const existing = pdoc.getElementById(MINIMAP_ID);
+    if (existing) existing.remove();
+
+    const panel = pdoc.createElement('div');
+    panel.id = MINIMAP_ID;
+    panel.style.cssText = 'position:fixed;top:80px;right:24px;width:380px;height:320px;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.25);display:flex;flex-direction:column;z-index:99999;font-family:sans-serif;';
+
+    const bar = pdoc.createElement('div');
+    bar.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#0078d4;color:#fff;border-radius:6px 6px 0 0;cursor:move;user-select:none;font-size:12px;gap:8px;';
+
+    const titleEl = pdoc.createElement('span');
+    titleEl.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
+    titleEl.title = label;
+    titleEl.textContent = label.split(',').slice(0, 2).join(',');
+
+    const closeBtn = pdoc.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:#fff;cursor:pointer;font-size:14px;padding:0 2px;';
+    closeBtn.addEventListener('click', () => panel.remove());
+
+    bar.appendChild(titleEl);
+    bar.appendChild(closeBtn);
+
+    const delta = 0.01;
+    const frame = pdoc.createElement('iframe');
+    frame.src   = `https://www.openstreetmap.org/export/embed.html?bbox=${lng-delta},${lat-delta},${lng+delta},${lat+delta}&layer=mapnik&marker=${lat},${lng}`;
+    frame.style.cssText = 'flex:1;border:none;border-radius:0 0 6px 6px;';
+
+    panel.appendChild(bar);
+    panel.appendChild(frame);
+    pdoc.body.appendChild(panel);
+
+    let dragging = false, ox = 0, oy = 0;
+    bar.addEventListener('mousedown', e => { dragging = true; const r = panel.getBoundingClientRect(); ox = e.clientX - r.left; oy = e.clientY - r.top; e.preventDefault(); });
+    pdoc.addEventListener('mousemove', e => { if (!dragging) return; panel.style.left = (e.clientX - ox) + 'px'; panel.style.top = (e.clientY - oy) + 'px'; panel.style.right = 'auto'; });
+    pdoc.addEventListener('mouseup', () => { dragging = false; });
+  }
+
+  // ── Geocoding ─────────────────────────────────────────────────────────────────
+
+  async function geocode(query) {
+    const res  = await fetch('https://nominatim.openstreetmap.org/search?' + new URLSearchParams({ q: query, format: 'json', limit: '1' }), {
+      headers: { 'Accept-Language': 'en', 'User-Agent': 'GeotabTripsHistoryEnhancer/6.0 (michaelolsen@geotab.com)' },
     });
-    obs.observe(doc.body, { childList: true, subtree: true });
+    const data = await res.json();
+    return data.length ? { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name } : null;
   }
 
-  // ── Page add-in lifecycle ─────────────────────────────────────────────────────
+  // ── Search widget ─────────────────────────────────────────────────────────────
+
+  const searchInput  = document.getElementById('search-input');
+  const searchBtn    = document.getElementById('search-btn');
+  const searchStatus = document.getElementById('search-status');
+
+  async function runSearch() {
+    const q = searchInput.value.trim();
+    if (!q) return;
+    searchStatus.textContent = 'Searching…'; searchBtn.disabled = true;
+    try {
+      const r = await geocode(q);
+      if (r) { searchStatus.title = r.label; searchStatus.textContent = '✓ Found'; showMiniMap(r.lat, r.lng, r.label); }
+      else searchStatus.textContent = 'No results';
+    } catch (e) { searchStatus.textContent = 'Error'; console.error('[TripsEnhancer]', e); }
+    finally { searchBtn.disabled = false; }
+  }
+
+  searchBtn.addEventListener('click', runSearch);
+  searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+
+  // ── Page add-in lifecycle — called by MyGeotab automatically ─────────────────
 
   geotab.addin.tripsHistoryEnhancer = function () {
     return {
       initialize: function (api, state, callback) {
         _api   = api;
         _state = state;
+        console.log('[TripsEnhancer] Initialized with api + state');
 
-        // Attach to our own document.
-        attachListeners(document);
-
-        // Attach to parent document (where MyGeotab renders tooltips).
-        try {
-          const pdoc = window.parent.document;
-          if (pdoc !== document) attachListeners(pdoc);
-        } catch (_) {}
+        // Attach to both our document and the parent (tooltips render in parent).
+        attachTo(document);
+        try { const pd = window.parent.document; if (pd !== document) attachTo(pd); } catch (_) {}
 
         // Warm the cache immediately.
         prefetch();
@@ -343,17 +300,16 @@
       },
 
       focus: function (api, state) {
-        // Called when user navigates to tripsHistory or changes the org filter.
+        // Called when user returns to tripsHistory or changes org filter.
         _api   = api;
         _state = state;
-        // Clear cache — device or date may have changed.
-        Object.keys(_tripCache).forEach(k => delete _tripCache[k]);
+        // Clear stale cache — device or date may have changed.
+        Object.keys(_rawTrips).forEach(k => delete _rawTrips[k]);
+        Object.keys(_timeMaps).forEach(k => delete _timeMaps[k]);
         prefetch();
       },
 
-      blur: function () {
-        // Nothing to tear down — listeners persist but are harmless off-page.
-      },
+      blur: function () { /* nothing to tear down */ },
     };
   };
 

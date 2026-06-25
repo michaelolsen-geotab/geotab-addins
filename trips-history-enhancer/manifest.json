@@ -1,14 +1,12 @@
 {
   "name": "Trips History Enhancer",
   "supportEmail": "michaelolsen@geotab.com",
-  "version": "3.0.0",
+  "version": "6.0.0",
   "items": [
     {
-      "page": "tripsHistory",
-      "click": "https://michaelolsen-geotab.github.io/geotab-addins/trips-history-enhancer/addin.js",
-      "buttonName": {
-        "en": "Trips+"
-      },
+      "path": "tripsHistory/",
+      "menuName": { "en": "Trips History Enhancer" },
+      "url": "https://michaelolsen-geotab.github.io/geotab-addins/trips-history-enhancer/addin.html",
       "noIcon": true
     }
   ],
