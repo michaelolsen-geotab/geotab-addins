@@ -193,6 +193,25 @@
   function extractTZ(text)   { const m = text.match(TZ_RE);   return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone; }
   function extractDate(text) { const m = text.match(DATE_RE); if (m) { const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`); if (!isNaN(d)) return d; } return new Date(); }
 
+  // Synchronous DOM write — call this once the timeMap is in hand.
+  function applyTimeMap(el, timeMap) {
+    const tw = (el.ownerDocument || document).createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = tw.nextNode())) {
+      let val = node.nodeValue;
+      val = val.replace(TIME_RE_12H, (match, hStr, mStr, ampm) => {
+        let h = parseInt(hStr, 10);
+        if (ampm.toLowerCase() === 'pm' && h < 12) h += 12;
+        if (ampm.toLowerCase() === 'am' && h === 12) h = 0;
+        return timeMap[`${pad2(h)}:${mStr}`] || match;
+      });
+      val = val.replace(TIME_RE_NOSEC, (match, hStr, mStr) => timeMap[`${pad2(parseInt(hStr,10))}:${mStr}`] || match);
+      if (val !== node.nodeValue) node.nodeValue = val;
+      TIME_RE_12H.lastIndex = 0;
+      TIME_RE_NOSEC.lastIndex = 0;
+    }
+  }
+
   async function upgradeEl(el) {
     const text = el.textContent || '';
     if (!TIME_RE.test(text)) return;
@@ -203,27 +222,14 @@
     const deviceId = getDeviceId();
     if (!deviceId) return;
 
+    // Fast path: trips already cached — write synchronously, no async yield.
+    const cached = getTimeMap(deviceId, dateStr, tz);
+    if (cached) { applyTimeMap(el, cached); return; }
+
+    // Slow path: need to fetch trips first, then write.
     await ensureTrips(deviceId, date);
     const timeMap = getTimeMap(deviceId, dateStr, tz);
-    if (!timeMap || !Object.keys(timeMap).length) return;
-
-    const tw = (el.ownerDocument || document).createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = tw.nextNode())) {
-      let val = node.nodeValue;
-      // Replace 12-hour times first
-      val = val.replace(TIME_RE_12H, (match, hStr, mStr, ampm) => {
-        let h = parseInt(hStr, 10);
-        if (ampm.toLowerCase() === 'pm' && h < 12) h += 12;
-        if (ampm.toLowerCase() === 'am' && h === 12) h = 0;
-        return timeMap[`${pad2(h)}:${mStr}`] || match;
-      });
-      // Replace remaining 24-hour times (skips already-upgraded HH:mm:ss)
-      val = val.replace(TIME_RE_NOSEC, (match, hStr, mStr) => timeMap[`${pad2(parseInt(hStr,10))}:${mStr}`] || match);
-      if (val !== node.nodeValue) node.nodeValue = val;
-      TIME_RE_12H.lastIndex = 0;
-      TIME_RE_NOSEC.lastIndex = 0;
-    }
+    if (timeMap) applyTimeMap(el, timeMap);
   }
 
   // ── Observer setup ───────────────────────────────────────────────────────────
