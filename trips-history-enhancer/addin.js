@@ -166,8 +166,18 @@
   const TZ_RE         = /\(([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\)/;
   const DATE_RE       = /\b(\d{2})\/(\d{2})\/(\d{2})\b/;
 
-  function extractTZ(text)   { const m = text.match(TZ_RE);   return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone; }
-  function extractDate(text) { const m = text.match(DATE_RE); if (m) { const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`); if (!isNaN(d)) return d; } return new Date(); }
+  function extractTZ(text) { const m = text.match(TZ_RE); return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone; }
+  function extractDate(text) {
+    const m = text.match(DATE_RE);
+    if (m) {
+      // Construct using local-time components so toDateString() matches the
+      // cache key (which is also built from local-time interpretation of timestamps).
+      // new Date("2026-06-23") parses as UTC midnight → wrong local date in non-UTC zones.
+      const d = new Date(2000 + parseInt(m[3], 10), parseInt(m[1], 10) - 1, parseInt(m[2], 10));
+      if (!isNaN(d)) return d;
+    }
+    return new Date();
+  }
 
   function applyTimeMap(el, timeMap) {
     const tw = (el.ownerDocument || document).createTreeWalker(el, NodeFilter.SHOW_TEXT);
