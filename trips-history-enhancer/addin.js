@@ -288,28 +288,41 @@
     return null;
   }
 
-  function toHHMMSS(isoStr) {
-    const d = new Date(isoStr);
-    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  // Format an ISO timestamp in a specific IANA timezone.
+  function toTZParts(isoStr, tz) {
+    try {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false, timeZone: tz,
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date(isoStr)).map(p => [p.type, p.value]));
+      // hour12:false gives "24" for midnight — normalise to "00"
+      const h = parts.hour === '24' ? '00' : parts.hour;
+      return { key: `${h}:${parts.minute}`, hhmmss: `${h}:${parts.minute}:${parts.second}` };
+    } catch (_) {
+      // Fallback to browser local time if timezone string is invalid.
+      const d = new Date(isoStr);
+      const h = pad2(d.getHours()), m = pad2(d.getMinutes()), s = pad2(d.getSeconds());
+      return { key: `${h}:${m}`, hhmmss: `${h}:${m}:${s}` };
+    }
   }
 
   // Build "HH:MM" → "HH:MM:SS" lookup from a list of Trip records.
-  // Trip.Start, Trip.Stop, and Trip.NextTripStart all carry stop-relevant times.
-  function buildTimeMap(trips) {
+  // Keys and values are formatted in the database timezone shown in the tooltip.
+  function buildTimeMap(trips, tz) {
     const map = {};
     trips.forEach(trip => {
       ['Start', 'Stop', 'NextTripStart'].forEach(field => {
         if (!trip[field]) return;
-        const d   = new Date(trip[field]);
-        const key = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-        if (!map[key]) map[key] = toHHMMSS(trip[field]);
+        const { key, hhmmss } = toTZParts(trip[field], tz);
+        if (!map[key]) map[key] = hhmmss;
       });
     });
     return map;
   }
 
-  async function getTimeMap(deviceId, date) {
-    const cacheKey = `${deviceId}|${date.toDateString()}`;
+  async function getTimeMap(deviceId, date, tz) {
+    const cacheKey = `${deviceId}|${date.toDateString()}|${tz}`;
     if (_tripCache[cacheKey]) return _tripCache[cacheKey];
 
     const from = new Date(date); from.setHours(0, 0, 0, 0);
@@ -325,7 +338,7 @@
         },
       },
       trips => {
-        const m = buildTimeMap(trips || []);
+        const m = buildTimeMap(trips || [], tz);
         _tripCache[cacheKey] = m;
         resolve(m);
       },
@@ -336,31 +349,48 @@
     });
   }
 
+  // Extract IANA timezone from tooltip text, e.g. "at 10:03 (America/Denver)" → "America/Denver".
+  function extractTimezone(text) {
+    const m = text.match(/\(([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\)/);
+    return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+
+  // Extract a date from tooltip text, e.g. "06/24/26" → Date object.
+  // Falls back to state date if not found.
+  function extractDate(text, fallback) {
+    const m = text.match(/\b(\d{2})\/(\d{2})\/(\d{2})\b/);
+    if (m) {
+      // MM/DD/YY — assume 2000s
+      const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return fallback;
+  }
+
   async function upgradeTooltipTimestamps(tooltipEl) {
     if (!_api || !_state) return;
 
+    const text = tooltipEl.textContent || '';
+    if (!TIME_RE.test(text)) return;
+
+    // Pull timezone and date directly from the tooltip — far more reliable than
+    // state, which may not reflect what's actually displayed in the dialog.
+    const tz = extractTimezone(text);
+
     const st = _state.getState ? _state.getState() : {};
+    const stateDateRaw = (st.dates && st.dates[0]) || st.date || st.fromDate || null;
+    const stateDate = stateDateRaw ? new Date(stateDateRaw) : new Date();
+    const contextDate = extractDate(text, stateDate);
 
-    // Uncomment to debug the state shape in your version:
-    // console.debug('[TripsEnhancer] state:', JSON.stringify(st));
-
-    // Pull device id — shape may vary; widen this if timestamps aren't upgrading.
     const deviceId = (st.device && (st.device.id || st.device))
                   || st.deviceId
                   || null;
+    if (!deviceId) return;
 
-    // Pull the viewed date — prefer the start of the selected range.
-    const dateRaw  = (st.dates && st.dates[0]) || st.date || st.fromDate || null;
-
-    if (!deviceId || !dateRaw) return;
-
-    const contextDate = new Date(dateRaw);
-    if (isNaN(contextDate.getTime())) return;
-
-    const timeMap = await getTimeMap(deviceId, contextDate);
+    const timeMap = await getTimeMap(deviceId, contextDate, tz);
     if (!Object.keys(timeMap).length) return;
 
-    // Walk every text node in the tooltip and replace matching HH:mm patterns.
+    // Walk every text node and replace HH:mm with HH:mm:ss.
     const walker = document.createTreeWalker(tooltipEl, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
@@ -368,7 +398,6 @@
       if (!parsed) continue;
       const key = `${pad2(parsed.h)}:${pad2(parsed.min)}`;
       if (!timeMap[key]) continue;
-      // Replace the first HH:mm (±AM/PM) occurrence in this text node.
       node.nodeValue = node.nodeValue.replace(
         /\b\d{1,2}:\d{2}(?:\s*(?:am|pm))?\b/i,
         timeMap[key]
@@ -390,25 +419,24 @@
 
   const TIME_RE = /\b\d{1,2}:\d{2}\b/;
 
-  // Throttle: only run one upgrade at a time; queue at most one pending call.
-  let _upgradeThrottle = null;
+  // Walk up from target to find a reasonable tooltip container (has ≥2 children).
+  // Stops before body. Returns the best candidate or target itself.
+  function findTooltipRoot(target) {
+    let el = target;
+    for (let i = 0; i < 8; i++) {
+      const p = el.parentElement;
+      if (!p || p.tagName === 'BODY' || p.tagName === 'HTML') break;
+      el = p;
+      if (el.children.length >= 2 && TIME_RE.test(el.textContent)) break;
+    }
+    return el;
+  }
 
   function handleMouseover(e) {
     const target = e.target;
     if (!target || target.nodeType !== Node.ELEMENT_NODE) return;
     if (!TIME_RE.test(target.textContent)) return;
-    if (_upgradeThrottle) return;
-
-    // Walk up to find a node that has children and contains a time — tooltip root.
-    let root = target;
-    for (let i = 0; i < 8 && root.parentElement && root.parentElement !== document.body; i++) {
-      if (root.children.length > 0 && TIME_RE.test(root.textContent)) break;
-      root = root.parentElement;
-    }
-
-    const el = root;
-    _upgradeThrottle = setTimeout(() => { _upgradeThrottle = null; }, 150);
-    upgradeTooltipTimestamps(el).catch(() => {});
+    upgradeTooltipTimestamps(findTooltipRoot(target)).catch(() => {});
   }
 
   // ── Button visual state ───────────────────────────────────────────────────────
