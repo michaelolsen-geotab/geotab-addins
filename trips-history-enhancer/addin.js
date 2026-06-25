@@ -365,11 +365,42 @@
     if (n > 0) setTimeout(() => tryInjectSearch(n - 1), 400);
   }
 
-  // ── Button entry point (required by MyGeotab to load this script) ────────────
-  // The button itself does nothing — auto-init via fetch interception handles everything.
+  // ── Button entry point ───────────────────────────────────────────────────────
+  // Clicking "Trips+" clears the cache and re-fetches trips for the current
+  // device/date. Use this after switching vehicles or date ranges.
 
   geotab.customButtons['Trips+'] = function (event, api, state) {
-    console.log('[TripsEnhancer] Button clicked. Credentials captured:', !!_creds, '| Trips cached:', Object.keys(_rawTrips).length);
+    // Clear all cached data.
+    Object.keys(_rawTrips).forEach(k => delete _rawTrips[k]);
+    Object.keys(_timeMaps).forEach(k => delete _timeMaps[k]);
+
+    // Re-fetch using api/state provided by the click — most reliable source.
+    if (api && state) {
+      try {
+        const st       = state.getState ? state.getState() : {};
+        const deviceId = (st.device && (st.device.id || st.device)) || st.deviceId;
+        const dateRaw  = (st.dates && st.dates[0]) || st.date || st.fromDate;
+        if (deviceId && dateRaw) {
+          // Use api directly from the click event — guaranteed to have credentials.
+          _creds      = null;  // will be re-captured on next MyGeotab API call
+          _serverBase = null;
+
+          const date = new Date(dateRaw);
+          const from = new Date(date); from.setHours(0, 0, 0, 0);
+          const to   = new Date(date); to.setHours(23, 59, 59, 999);
+
+          api.call('Get', {
+            typeName: 'Trip',
+            search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
+          }, trips => {
+            if (trips && trips.length) {
+              _rawTrips[`${deviceId}|${date.toDateString()}`] = trips;
+              console.log(`[TripsEnhancer] Refreshed ${trips.length} trips for ${deviceId}`);
+            }
+          }, err => console.error('[TripsEnhancer] Refresh error:', err));
+        }
+      } catch (e) { console.error('[TripsEnhancer] Refresh error:', e); }
+    }
   };
 
   // ── Boot ─────────────────────────────────────────────────────────────────────
