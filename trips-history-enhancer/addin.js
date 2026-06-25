@@ -1,127 +1,116 @@
 /**
- * Trips History Enhancer — MyGeotab Button Add-in v4
+ * Trips History Enhancer — MyGeotab Button Add-in v7
  * Target: 11.130.494-0c2376cea2b9
  *
- * Auto-initializes by intercepting MyGeotab's own fetch/XHR calls to capture
- * session credentials and trip data — no button click required.
+ * Click "Trips+" once after loading the page to activate. The button stores
+ * the api object and fetches trip data. After that, seconds appear on hover
+ * instantly for that device/date. Click again after switching device or date.
  *
  * Features:
- *   1. Second-precision timestamps on stop/zone/driving hover tooltips
+ *   1. Second-precision timestamps on all stop/zone/driving hover tooltips
  *   2. Address search → draggable OpenStreetMap mini-map overlay
  */
 (function () {
   'use strict';
 
-  // ── Session & trip storage ───────────────────────────────────────────────────
-  let _creds      = null;   // { sessionId, database, userName }
-  let _serverBase = null;   // e.g. "https://app.geotab.com"
+  // ── State ────────────────────────────────────────────────────────────────────
+  let _api      = null;
+  let _deviceId = null;  // last known device from button click or URL hash
 
-  // Raw trips keyed "deviceId|dateStr" → array of trip objects (ISO strings)
+  // Raw trips:  "deviceId|dateStr"    → Trip[]
+  // Time maps:  "deviceId|dateStr|tz" → { "HH:MM": "HH:MM:SS" }
   const _rawTrips = {};
-
-  // Built timeMaps keyed "deviceId|dateStr|tz" → { "HH:MM": "HH:MM:SS" }
   const _timeMaps = {};
 
-  // ── Fetch / XHR interception ─────────────────────────────────────────────────
-  // The add-in iframe is same-origin with the parent. We patch both windows so we
-  // capture MyGeotab's first authenticated API call regardless of which context
-  // initiates it. All original behaviour is preserved — we only read, never modify.
+  // ── Trip fetching ────────────────────────────────────────────────────────────
 
-  function onApiRequest(urlStr, body) {
-    try {
-      const req  = JSON.parse(body);
-      const p    = req && req.params;
-      if (!p) return;
+  function fetchTrips(deviceId, date) {
+    if (!_api || !deviceId) return Promise.resolve();
+    const dateStr = date.toDateString();
+    if (_rawTrips[`${deviceId}|${dateStr}`]) return Promise.resolve();
 
-      // Capture session credentials from any API call.
-      if (!_creds && p.credentials && p.credentials.sessionId) {
-        _creds      = p.credentials;
-        _serverBase = urlStr.split('/apiv1')[0];
-        console.log('[TripsEnhancer] Session captured');
-      }
-    } catch (_) {}
-  }
+    const from = new Date(date); from.setHours(0, 0, 0, 0);
+    const to   = new Date(date); to.setHours(23, 59, 59, 999);
 
-  function onApiResponse(urlStr, body, resData) {
-    try {
-      const req = JSON.parse(body);
-      const p   = req && req.params;
-      if (!p || p.typeName !== 'Trip') return;
-
-      const trips = resData && resData.result;
-      if (!Array.isArray(trips) || !trips.length) return;
-
-      const search   = p.search;
-      const deviceId = search && search.deviceSearch && search.deviceSearch.id;
-      const fromDate = search && search.fromDate;
-      if (!deviceId || !fromDate) return;
-
-      const dateStr = new Date(fromDate).toDateString();
-      const cacheKey = `${deviceId}|${dateStr}`;
-      if (!_rawTrips[cacheKey]) {
-        _rawTrips[cacheKey] = trips;
-        console.log(`[TripsEnhancer] Cached ${trips.length} trips for ${cacheKey}`);
-      }
-    } catch (_) {}
-  }
-
-  function patchFetch(win) {
-    try {
-      const orig = win.fetch;
-      win.fetch = function (input, init) {
-        const url  = typeof input === 'string' ? input : (input && input.url) || '';
-        const body = init && init.body;
-        if (body && url.includes('/apiv1')) {
-          onApiRequest(url, body);
-          const p = orig.apply(win, arguments);
-          p.then(r => r.clone().json().then(d => onApiResponse(url, body, d)).catch(() => {})).catch(() => {});
-          return p;
+    return new Promise(resolve => {
+      _api.call('Get', {
+        typeName: 'Trip',
+        search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
+      }, trips => {
+        if (trips && trips.length) {
+          _rawTrips[`${deviceId}|${dateStr}`] = trips;
+          console.log(`[TripsEnhancer] Fetched ${trips.length} trips for ${deviceId} on ${dateStr}`);
+        } else {
+          console.warn('[TripsEnhancer] No trips returned for', deviceId, dateStr);
         }
-        return orig.apply(win, arguments);
-      };
-    } catch (_) {}
+        resolve();
+      }, err => { console.error('[TripsEnhancer] Trip fetch error:', err); resolve(); });
+    });
   }
 
-  function patchXHR(win) {
-    try {
-      const proto    = win.XMLHttpRequest.prototype;
-      const origOpen = proto.open;
-      const origSend = proto.send;
-      proto.open = function (m, url) { this._triUrl = url; return origOpen.apply(this, arguments); };
-      proto.send = function (body) {
-        if (body && this._triUrl && this._triUrl.includes('/apiv1')) {
-          const url = this._triUrl;
-          onApiRequest(url, body);
-          this.addEventListener('load', () => {
-            try { onApiResponse(url, body, JSON.parse(this.responseText)); } catch (_) {}
-          });
-        }
-        return origSend.apply(this, arguments);
-      };
-    } catch (_) {}
-  }
-
-  // Patch immediately — before any MyGeotab React component mounts and fires requests.
-  patchFetch(window);
-  patchXHR(window);
-  try { patchFetch(window.parent); } catch (_) {}
-  try { patchXHR(window.parent);  } catch (_) {}
-
-  // ── Device ID detection ──────────────────────────────────────────────────────
-  // Primary: parse from URL hash (same-origin parent location is readable).
-  // Fallback: use whichever device we have cached trip data for.
+  // ── Device / date helpers ────────────────────────────────────────────────────
 
   function getDeviceId() {
+    if (_deviceId) return _deviceId;
     try {
       const hash = window.parent.location.hash || window.location.hash || '';
-      // Handles both "device:(id:b123)" and "device:b123" hash formats.
-      const m = hash.match(/[Dd]evice[:(]+id:([^),\s]+)/);
-      if (m) return m[1];
+      const m    = hash.match(/[Dd]evice[:(]+id:([^),\s]+)/);
+      if (m) return (_deviceId = m[1]);
     } catch (_) {}
-    // Fall back to first captured device key.
     const first = Object.keys(_rawTrips)[0];
     return first ? first.split('|')[0] : null;
   }
+
+  function getDeviceAndDate(state) {
+    const results = { deviceId: null, date: null };
+    try {
+      const st      = state && state.getState ? state.getState() : {};
+      results.deviceId = (st.device && (st.device.id || st.device)) || st.deviceId || null;
+      const dateRaw    = (st.dates && st.dates[0]) || st.date || st.fromDate || null;
+      results.date     = dateRaw ? new Date(dateRaw) : null;
+      console.log('[TripsEnhancer] state:', JSON.stringify(st).slice(0, 200));
+    } catch (e) { console.error('[TripsEnhancer] getState error:', e); }
+    return results;
+  }
+
+  // ── Button ───────────────────────────────────────────────────────────────────
+
+  geotab.customButtons['Trips+'] = function (event, api, state) {
+    _api = api;
+
+    const { deviceId, date } = getDeviceAndDate(state);
+    if (deviceId) _deviceId = deviceId;
+
+    // Clear stale cache.
+    Object.keys(_rawTrips).forEach(k => delete _rawTrips[k]);
+    Object.keys(_timeMaps).forEach(k => delete _timeMaps[k]);
+
+    // Visual feedback — button turns green while fetching.
+    const btn = event && (event.target || event.srcElement);
+    if (btn) {
+      const origBg   = btn.style.background;
+      const origText = btn.textContent;
+      btn.style.background = '#27ae60';
+      btn.textContent      = 'Fetching…';
+      btn.disabled         = true;
+
+      const done = () => {
+        btn.style.background = origBg;
+        btn.textContent      = origText;
+        btn.disabled         = false;
+      };
+
+      if (_deviceId && date) {
+        fetchTrips(_deviceId, date).then(done);
+      } else {
+        console.warn('[TripsEnhancer] Could not determine device or date from state. deviceId:', _deviceId, 'date:', date);
+        btn.textContent = 'No device?';
+        setTimeout(done, 2000);
+      }
+    } else {
+      if (_deviceId && date) fetchTrips(_deviceId, date);
+    }
+  };
 
   // ── Time formatting ──────────────────────────────────────────────────────────
 
@@ -129,9 +118,11 @@
 
   function toTZParts(isoStr, tz) {
     try {
-      const fmt  = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: tz });
-      const p    = Object.fromEntries(fmt.formatToParts(new Date(isoStr)).map(x => [x.type, x.value]));
-      const h    = p.hour === '24' ? '00' : p.hour;
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: tz,
+      });
+      const p = Object.fromEntries(fmt.formatToParts(new Date(isoStr)).map(x => [x.type, x.value]));
+      const h = p.hour === '24' ? '00' : p.hour;
       return { key: `${h}:${p.minute}`, hhmmss: `${h}:${p.minute}:${p.second}` };
     } catch (_) {
       const d = new Date(isoStr);
@@ -143,10 +134,8 @@
   function getTimeMap(deviceId, dateStr, tz) {
     const mk = `${deviceId}|${dateStr}|${tz}`;
     if (_timeMaps[mk]) return _timeMaps[mk];
-
     const trips = _rawTrips[`${deviceId}|${dateStr}`];
     if (!trips) return null;
-
     const map = {};
     trips.forEach(trip => {
       ['Start', 'Stop', 'NextTripStart'].forEach(field => {
@@ -155,31 +144,7 @@
         if (!map[key]) map[key] = hhmmss;
       });
     });
-    _timeMaps[mk] = map;
-    return map;
-  }
-
-  // Fetch from API ourselves if we captured credentials but not this day's trips.
-  async function ensureTrips(deviceId, date) {
-    const dateStr = date.toDateString();
-    if (_rawTrips[`${deviceId}|${dateStr}`]) return;
-    if (!_creds || !_serverBase) return;
-
-    const from = new Date(date); from.setHours(0, 0, 0, 0);
-    const to   = new Date(date); to.setHours(23, 59, 59, 999);
-    try {
-      const res  = await fetch(`${_serverBase}/apiv1`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method: 'Get', params: {
-          typeName: 'Trip',
-          search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
-          credentials: _creds,
-        }}),
-      });
-      const data = await res.json();
-      if (data.result) _rawTrips[`${deviceId}|${dateStr}`] = data.result;
-    } catch (e) { console.error('[TripsEnhancer] Trip fetch error:', e); }
+    return (_timeMaps[mk] = map);
   }
 
   // ── Tooltip upgrade ──────────────────────────────────────────────────────────
@@ -193,7 +158,6 @@
   function extractTZ(text)   { const m = text.match(TZ_RE);   return m ? m[1] : Intl.DateTimeFormat().resolvedOptions().timeZone; }
   function extractDate(text) { const m = text.match(DATE_RE); if (m) { const d = new Date(`20${m[3]}-${m[1]}-${m[2]}`); if (!isNaN(d)) return d; } return new Date(); }
 
-  // Synchronous DOM write — call this once the timeMap is in hand.
   function applyTimeMap(el, timeMap) {
     const tw = (el.ownerDocument || document).createTreeWalker(el, NodeFilter.SHOW_TEXT);
     let node;
@@ -205,7 +169,7 @@
         if (ampm.toLowerCase() === 'am' && h === 12) h = 0;
         return timeMap[`${pad2(h)}:${mStr}`] || match;
       });
-      val = val.replace(TIME_RE_NOSEC, (match, hStr, mStr) => timeMap[`${pad2(parseInt(hStr,10))}:${mStr}`] || match);
+      val = val.replace(TIME_RE_NOSEC, (match, hStr, mStr) => timeMap[`${pad2(parseInt(hStr, 10))}:${mStr}`] || match);
       if (val !== node.nodeValue) node.nodeValue = val;
       TIME_RE_12H.lastIndex = 0;
       TIME_RE_NOSEC.lastIndex = 0;
@@ -222,17 +186,17 @@
     const deviceId = getDeviceId();
     if (!deviceId) return;
 
-    // Fast path: trips already cached — write synchronously, no async yield.
+    // Synchronous fast path — no flash if cache is warm.
     const cached = getTimeMap(deviceId, dateStr, tz);
     if (cached) { applyTimeMap(el, cached); return; }
 
-    // Slow path: need to fetch trips first, then write.
-    await ensureTrips(deviceId, date);
+    // Slow path — fetch then apply.
+    await fetchTrips(deviceId, date);
     const timeMap = getTimeMap(deviceId, dateStr, tz);
     if (timeMap) applyTimeMap(el, timeMap);
   }
 
-  // ── Observer setup ───────────────────────────────────────────────────────────
+  // ── Observers ────────────────────────────────────────────────────────────────
 
   function handleMouseover(e) {
     const t = e.target;
@@ -257,12 +221,6 @@
               upgradeEl(node).catch(() => {});
       }).observe(doc.body, { childList: true, subtree: true });
     } catch (_) {}
-  }
-
-  function init() {
-    attachTo(document);
-    try { const pd = window.parent.document; if (pd !== document) attachTo(pd); } catch (_) {}
-    tryInjectSearch(30);
   }
 
   // ── Minimap ──────────────────────────────────────────────────────────────────
@@ -308,21 +266,19 @@
     document.addEventListener('mouseup', () => { dragging = false; });
   }
 
-  // ── Geocoding ────────────────────────────────────────────────────────────────
+  // ── Geocoding ─────────────────────────────────────────────────────────────────
 
   async function geocode(query) {
     const res  = await fetch('https://nominatim.openstreetmap.org/search?' + new URLSearchParams({ q: query, format: 'json', limit: '1' }), {
-      headers: { 'Accept-Language': 'en', 'User-Agent': 'GeotabTripsHistoryEnhancer/4.0 (michaelolsen@geotab.com)' },
+      headers: { 'Accept-Language': 'en', 'User-Agent': 'GeotabTripsHistoryEnhancer/7.0 (michaelolsen@geotab.com)' },
     });
     const data = await res.json();
-    if (!data.length) return null;
-    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name };
+    return data.length ? { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name } : null;
   }
 
   // ── Search widget ─────────────────────────────────────────────────────────────
 
-  const WIDGET_ID = 'gia-trips-enhancer-search';
-
+  const WIDGET_ID   = 'gia-trips-enhancer-search';
   const SEL_TOOLBAR = ['.page-action-bar','.trips-history-toolbar','.action-bar','.toolbar-container','[class*="actionBar"]','[class*="toolbar"]'].join(', ');
 
   function buildSearchWidget() {
@@ -365,45 +321,14 @@
     if (n > 0) setTimeout(() => tryInjectSearch(n - 1), 400);
   }
 
-  // ── Button entry point ───────────────────────────────────────────────────────
-  // Clicking "Trips+" clears the cache and re-fetches trips for the current
-  // device/date. Use this after switching vehicles or date ranges.
+  // ── Boot ──────────────────────────────────────────────────────────────────────
 
-  geotab.customButtons['Trips+'] = function (event, api, state) {
-    // Clear all cached data.
-    Object.keys(_rawTrips).forEach(k => delete _rawTrips[k]);
-    Object.keys(_timeMaps).forEach(k => delete _timeMaps[k]);
+  function init() {
+    attachTo(document);
+    try { const pd = window.parent.document; if (pd !== document) attachTo(pd); } catch (_) {}
+    tryInjectSearch(30);
+  }
 
-    // Re-fetch using api/state provided by the click — most reliable source.
-    if (api && state) {
-      try {
-        const st       = state.getState ? state.getState() : {};
-        const deviceId = (st.device && (st.device.id || st.device)) || st.deviceId;
-        const dateRaw  = (st.dates && st.dates[0]) || st.date || st.fromDate;
-        if (deviceId && dateRaw) {
-          // Use api directly from the click event — guaranteed to have credentials.
-          _creds      = null;  // will be re-captured on next MyGeotab API call
-          _serverBase = null;
-
-          const date = new Date(dateRaw);
-          const from = new Date(date); from.setHours(0, 0, 0, 0);
-          const to   = new Date(date); to.setHours(23, 59, 59, 999);
-
-          api.call('Get', {
-            typeName: 'Trip',
-            search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
-          }, trips => {
-            if (trips && trips.length) {
-              _rawTrips[`${deviceId}|${date.toDateString()}`] = trips;
-              console.log(`[TripsEnhancer] Refreshed ${trips.length} trips for ${deviceId}`);
-            }
-          }, err => console.error('[TripsEnhancer] Refresh error:', err));
-        }
-      } catch (e) { console.error('[TripsEnhancer] Refresh error:', e); }
-    }
-  };
-
-  // ── Boot ─────────────────────────────────────────────────────────────────────
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
