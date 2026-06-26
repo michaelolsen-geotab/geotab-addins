@@ -93,7 +93,9 @@
 
     try {
       const st       = state && state.getState ? state.getState() : {};
-      const deviceId = st.devices && st.devices[0] ? String(st.devices[0]) : null;
+      // st.devices present in some DBs, st.routes keys are the fallback.
+      const deviceId = (st.devices && st.devices[0] ? String(st.devices[0]) : null)
+                    || (st.routes && Object.keys(st.routes)[0]) || null;
       if (deviceId) _deviceId = deviceId;
 
       console.log('[TripsEnhancer] deviceId:', deviceId, '| routes:', st.routes ? Object.keys(st.routes) : 'none');
