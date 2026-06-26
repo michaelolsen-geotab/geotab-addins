@@ -23,11 +23,12 @@
   const _timeMaps = {};
 
   // ── Trip fetching ────────────────────────────────────────────────────────────
+  // Trips are stored per device only (no date in key) so there's no
+  // date-string mismatch between how the cache was built and how it's looked up.
 
   function fetchTrips(deviceId, date) {
     if (!_api || !deviceId) return Promise.resolve();
-    const dateStr = date.toDateString();
-    if (_rawTrips[`${deviceId}|${dateStr}`]) return Promise.resolve();
+    if (_rawTrips[deviceId]) return Promise.resolve();
 
     const from = new Date(date); from.setHours(0, 0, 0, 0);
     const to   = new Date(date); to.setHours(23, 59, 59, 999);
@@ -38,10 +39,10 @@
         search: { deviceSearch: { id: deviceId }, fromDate: from.toISOString(), toDate: to.toISOString() },
       }, trips => {
         if (trips && trips.length) {
-          _rawTrips[`${deviceId}|${dateStr}`] = trips;
-          console.log(`[TripsEnhancer] Fetched ${trips.length} trips for ${deviceId} on ${dateStr}`);
+          _rawTrips[deviceId] = trips;
+          console.log(`[TripsEnhancer] Fetched ${trips.length} trips for ${deviceId}`);
         } else {
-          console.warn('[TripsEnhancer] No trips returned for', deviceId, dateStr);
+          console.warn('[TripsEnhancer] No trips returned for', deviceId);
         }
         resolve();
       }, err => { console.error('[TripsEnhancer] Trip fetch error:', err); resolve(); });
@@ -57,8 +58,7 @@
       const m    = hash.match(/[Dd]evice[:(]+id:([^),\s]+)/);
       if (m) return (_deviceId = m[1]);
     } catch (_) {}
-    const first = Object.keys(_rawTrips)[0];
-    return first ? first.split('|')[0] : null;
+    return Object.keys(_rawTrips)[0] || null;
   }
 
   function getDeviceAndDate(state) {
@@ -103,16 +103,11 @@
       // Fast path: build cache from routes already in state (full-precision timestamps).
       if (deviceId && st.routes && st.routes[deviceId] && st.routes[deviceId].length) {
         const routes = st.routes[deviceId];
-        routes.forEach((route, i) => {
-          if (!route.start) return;
-          const dateStr = new Date(route.start).toDateString();
-          if (!_rawTrips[`${deviceId}|${dateStr}`]) _rawTrips[`${deviceId}|${dateStr}`] = [];
-          _rawTrips[`${deviceId}|${dateStr}`].push({
-            Start:         route.start,
-            Stop:          route.stop,
-            NextTripStart: routes[i + 1] ? routes[i + 1].start : null,
-          });
-        });
+        _rawTrips[deviceId] = routes.map((route, i) => ({
+          Start:         route.start,
+          Stop:          route.stop,
+          NextTripStart: routes[i + 1] ? routes[i + 1].start : null,
+        }));
         console.log(`[TripsEnhancer] Cache built from state: ${routes.length} routes for ${deviceId}`);
         flashBtn('✓ Ready', '#27ae60');
         return;
@@ -124,7 +119,7 @@
         const date    = dateRaw ? new Date(dateRaw) : new Date();
         flashBtn('Fetching…', '#e67e22');
         fetchTrips(deviceId, date).then(() => {
-          const n = (_rawTrips[`${deviceId}|${date.toDateString()}`] || []).length;
+          const n = (_rawTrips[deviceId] || []).length;
           console.log(`[TripsEnhancer] API fallback fetched ${n} trips`);
           if (btn) { btn.style.background = '#27ae60'; btn.textContent = '✓ Ready'; btn.disabled = true;
             setTimeout(() => { btn.style.background = ''; btn.textContent = 'Trips+'; btn.disabled = false; }, 2500); }
@@ -160,10 +155,10 @@
     }
   }
 
-  function getTimeMap(deviceId, dateStr, tz) {
-    const mk = `${deviceId}|${dateStr}|${tz}`;
+  function getTimeMap(deviceId, tz) {
+    const mk = `${deviceId}|${tz}`;
     if (_timeMaps[mk]) return _timeMaps[mk];
-    const trips = _rawTrips[`${deviceId}|${dateStr}`];
+    const trips = _rawTrips[deviceId];
     if (!trips) return null;
     const map = {};
     trips.forEach(trip => {
@@ -221,17 +216,16 @@
 
     const tz       = extractTZ(text);
     const date     = extractDate(text);
-    const dateStr  = date.toDateString();
     const deviceId = getDeviceId();
     if (!deviceId) return;
 
     // Synchronous fast path — no flash if cache is warm.
-    const cached = getTimeMap(deviceId, dateStr, tz);
+    const cached = getTimeMap(deviceId, tz);
     if (cached) { applyTimeMap(el, cached); return; }
 
     // Slow path — fetch then apply.
     await fetchTrips(deviceId, date);
-    const timeMap = getTimeMap(deviceId, dateStr, tz);
+    const timeMap = getTimeMap(deviceId, tz);
     if (timeMap) applyTimeMap(el, timeMap);
   }
 
